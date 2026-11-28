@@ -2,8 +2,11 @@ package featurecat.lizzie.rules;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -46,6 +49,12 @@ public class BoardHistoryNode {
 
   static boolean suppressGlobalMoveSideEffects() {
     return DETACHED_BRANCH_NUMBERING.get() != null;
+  }
+
+  static boolean startsBranchNumberingAtOne() {
+    Boolean detachedBranchNumbering = DETACHED_BRANCH_NUMBERING.get();
+    return detachedBranchNumbering != null
+        ? detachedBranchNumbering : Lizzie.config != null && Lizzie.config.newMoveNumberInBranch;
   }
 
   /** Initializes a new list node */
@@ -95,6 +104,42 @@ public class BoardHistoryNode {
     stone.y = y;
     stone.isBlack = isBlack;
     extraStones.add(stone);
+  }
+
+  void clearAnalysisAfterSetupEdit() {
+    data.setAuthoredComment(data.authoredComment());
+    data.clearAnalysisPayloadState();
+    nodeInfo = new NodeInfo();
+    nodeInfoMain = new NodeInfo();
+    nodeInfo2 = new NodeInfo();
+    nodeInfoMain2 = new NodeInfo();
+    analyzed = false;
+    diffAnalyzed = false;
+    isBest = false;
+  }
+
+  /** Keep SGF declarations and legacy engine navigation metadata aligned with this snapshot. */
+  void updateSetupMetadata(BoardData parent, BitSet points) {
+    // A snapshot's last move is an observation about a stone, not an action to replay.
+    data.lastMove = data.lastMoveOnBoard(data.zobrist.width(), data.zobrist.height());
+    if (data.lastMove.isEmpty()) data.lastMoveColor = Stone.EMPTY;
+    var props = data.getProperties();
+    props.remove("AB");
+    props.remove("AW");
+    props.remove("AE");
+    props.putAll(SnapshotSetup.properties(data, points, data.zobrist.width(), data.zobrist.height()));
+    props.put("PL", List.of(data.blackToPlay ? "B" : "W"));
+
+    extraStones = null;
+    hasRemovedStone = false;
+    int height = data.zobrist.height();
+    for (int i = points.nextSetBit(0); i >= 0; i = points.nextSetBit(i + 1)) {
+      Stone inherited = parent == null ? Stone.EMPTY : parent.stones[i];
+      Stone stone = data.stones[i];
+      if (stone == inherited) continue;
+      if (!inherited.isEmpty()) hasRemovedStone = true;
+      if (!stone.isEmpty()) addExtraStones(i / height, i % height, stone.isBlack());
+    }
   }
 
   public synchronized void undoExtraStones() {
@@ -150,11 +195,33 @@ public class BoardHistoryNode {
     child.previous = Optional.of(this);
   }
 
-  public BoardHistoryNode addAtLast(BoardData data) {
-    if (!this.previous.isPresent()) {
-      data.moveMNNumber = 1;
+  private void initializeRootChildNumber(BoardData child, boolean restartNumbering) {
+    if (previous.isPresent()) return;
+    if (data.moveNumber == 0) {
+      child.moveMNNumber = 1;
+    } else if (!restartNumbering && child.moveMNNumber == -1) {
+      // An observed midgame root has no preceding action nodes to supply a display number.
+      child.moveMNNumber = child.moveNumber;
     }
-    if (Lizzie.config.newMoveNumberInBranch && !variations.isEmpty()) {
+  }
+
+  /** Number a newly played move before captures remove labels. A reserved main line counts as a fork. */
+  public void initializePlayedMoveNumber(BoardData move, boolean startsVariation) {
+    boolean restart = startsVariation && startsBranchNumberingAtOne();
+    move.moveMNNumber = restart ? 1 : data.nextMoveMNNumber(false);
+    if (restart) move.clearInheritedMoveNumbers();
+    else if (move.moveMNNumber == -1) initializeRootChildNumber(move, false);
+    if (move.moveNumberList != null) {
+      int[] point = move.lastMove.orElseThrow();
+      move.moveNumberList[move.zobrist.index(point[0], point[1])] =
+          move.moveMNNumber >= 0 ? move.moveMNNumber : move.moveNumber;
+    }
+  }
+
+  public BoardHistoryNode addAtLast(BoardData data) {
+    boolean restartNumbering = Lizzie.config.newMoveNumberInBranch && !variations.isEmpty();
+    initializeRootChildNumber(data, restartNumbering);
+    if (restartNumbering) {
       if (data.moveMNNumber == -1) {
         data.moveMNNumber = data.dummy ? 0 : 1;
       }
@@ -255,13 +322,11 @@ public class BoardHistoryNode {
       }
     }
 
-    if (!this.previous.isPresent() && !tsumego) {
-      data.moveMNNumber = 1;
-    }
-    if ((suppressSideEffects ? DETACHED_BRANCH_NUMBERING.get() : Lizzie.config.newMoveNumberInBranch)
-        && !variations.isEmpty() && !changeMove) {
+    boolean restartNumbering = startsBranchNumberingAtOne() && !variations.isEmpty() && !changeMove;
+    if (!tsumego) initializeRootChildNumber(data, restartNumbering);
+    if (restartNumbering) {
       if (!newBranch) {
-        data.moveNumberList = new int[data.stones.length];
+        data.clearInheritedMoveNumbers();
         data.moveMNNumber = -1;
       }
       if (data.moveMNNumber == -1) {
@@ -316,11 +381,10 @@ public class BoardHistoryNode {
         return variation;
       }
     }
-    if (!previous.isPresent()) {
-      data.moveMNNumber = 1;
-    }
-    if (frozenNewMoveNumberInBranch && !variations.isEmpty()) {
-      data.moveNumberList = new int[Board.boardWidth * Board.boardHeight];
+    boolean restartNumbering = frozenNewMoveNumberInBranch && !variations.isEmpty();
+    initializeRootChildNumber(data, restartNumbering);
+    if (restartNumbering) {
+      data.clearInheritedMoveNumbers();
       data.moveMNNumber = -1;
       if (data.moveNumberList != null && data.lastMove.isPresent()) {
         int[] move = data.lastMove.get();
@@ -337,12 +401,13 @@ public class BoardHistoryNode {
     return node;
   }
 
-  Optional<BoardHistoryNode> findDirectChildByMoveIdentity(BoardData candidate) {
+  /** Find a recorded action that produces this position and will replay with the same capture policy. */
+  public Optional<BoardHistoryNode> findDirectChildByMoveIdentity(BoardData candidate) {
     if (candidate == null || !candidate.isHistoryActionNode()) {
       return Optional.empty();
     }
     for (BoardHistoryNode variation : variations) {
-      if (matchesMoveIdentity(variation.getData(), candidate)) {
+      if (matchesPlayedAction(variation.getData(), candidate)) {
         return Optional.of(variation);
       }
     }
@@ -370,7 +435,7 @@ public class BoardHistoryNode {
 
   /** Detached node for saving; callers reconnect only detached parents/children. */
   BoardHistoryNode copyForSave() {
-    return copyMetadata(data.copyForSave(), false);
+    return copyMetadata(data.copyForSave(previous.isEmpty()), false);
   }
 
   BoardHistoryNode copyForRestore(BoardData copiedData) {
@@ -399,6 +464,21 @@ public class BoardHistoryNode {
     if (nodeInfoMain == null) nodeInfoMain = new NodeInfo();
     if (nodeInfo2 == null) nodeInfo2 = new NodeInfo();
     if (nodeInfoMain2 == null) nodeInfoMain2 = new NodeInfo();
+  }
+
+  /** Keep copied move analysis aligned with a renumbered child while preserving branch selection. */
+  void renumberCachedChildMove(BoardData move, int originalMoveNumber) {
+    if (!move.isMoveNode() || move.moveNumber == originalMoveNumber) return;
+    renumberMoveInfo(nodeInfo, move, originalMoveNumber);
+    renumberMoveInfo(nodeInfoMain, move, originalMoveNumber);
+    renumberMoveInfo(nodeInfo2, move, originalMoveNumber);
+    renumberMoveInfo(nodeInfoMain2, move, originalMoveNumber);
+  }
+
+  private static void renumberMoveInfo(NodeInfo info, BoardData move, int originalMoveNumber) {
+    if (info != null && info.describesMove(move, originalMoveNumber)) {
+      info.moveNum = move.moveNumber;
+    }
   }
 
   private static NodeInfo copyNodeInfo(NodeInfo source, boolean deferEmpty) {
@@ -517,40 +597,74 @@ public class BoardHistoryNode {
     if (index <= 0) {
       return;
     }
-    BoardHistoryNode previousSibling = variations.get(index - 1);
-    variations.set(index - 1, child);
-    variations.set(index, previousSibling);
-    if ((index - 1) == 0) {
-      child.swapMoveNumberList(previousSibling);
-    }
+    swapVariations(index - 1, index);
   }
 
   public void moveChildDown(BoardHistoryNode child) {
     int index = findDirectChildIndex(child);
-    if (index < 0 || index >= variations.size() - 1) {
-      return;
-    }
-    BoardHistoryNode nextSibling = variations.get(index + 1);
-    variations.set(index + 1, child);
-    variations.set(index, nextSibling);
-    if (index == 0) {
-      nextSibling.swapMoveNumberList(child);
+    if (index >= 0 && index < variations.size() - 1) swapVariations(index, index + 1);
+  }
+
+  boolean promoteChild(BoardHistoryNode child) {
+    int index = findDirectChildIndex(child);
+    if (index <= 0) return false;
+    swapVariations(0, index);
+    return true;
+  }
+
+  private void swapVariations(int first, int second) {
+    Collections.swap(variations, first, second);
+    if (first == 0) {
+      variations.get(first).rebuildBranchNumbers();
+      variations.get(second).rebuildBranchNumbers();
     }
   }
 
-  public void swapMoveNumberList(BoardHistoryNode child) {
-    int childStart = child.getData().moveMNNumber;
-    child.resetMoveNumberListBranch(this.getData().moveMNNumber);
-    this.resetMoveNumberListBranch(childStart);
+  void applyMoveNumber(int moveNumber) {
+    applyMoveNumber(moveNumber, false);
   }
 
-  public void resetMoveNumberListBranch(int start) {
-    this.resetMoveNumberList(start);
-    BoardHistoryNode node = this;
-    while (node.next().isPresent()) {
-      node = node.next().get();
-      start++;
-      node.resetMoveNumberList(start);
+  void reapplyAuthoredMoveNumber() {
+    String authoredNumber = data.getProperty("MN");
+    if (authoredNumber != null) applyMoveNumber(Integer.parseInt(authoredNumber), true);
+  }
+
+  private void applyMoveNumber(int moveNumber, boolean replaySgfOrder) {
+    if (!data.isMoveNode()) return;
+    BitSet laterPlacements = new BitSet(data.stones.length);
+    for (BoardHistoryNode node = this; node != null; node = node.numberingPredecessor(replaySgfOrder)) {
+      node.markSetupChanges(laterPlacements);
+      BoardData played = node.data;
+      if (!played.isMoveNode()) continue;
+      boolean renumber = node == this || played.moveNumber >= moveNumber;
+      if (node != this && renumber) moveNumber = moveNumber > 1 ? moveNumber - 1 : 0;
+      int[] point = played.lastMove.orElseThrow();
+      int index = data.zobrist.index(point[0], point[1]);
+      if (renumber && !laterPlacements.get(index) && data.stones[index] == played.lastMoveColor) {
+        data.moveNumberList[index] = moveNumber;
+      }
+      // An earlier stone cannot take the label of a more recent occupant of the same point.
+      laterPlacements.set(index);
+    }
+  }
+
+  private BoardHistoryNode numberingPredecessor(boolean replaySgfOrder) {
+    BoardHistoryNode parent = previous.orElse(null);
+    if (parent == null || !parent.hasVariations()) return parent;
+    // At the first continuation, SGF has yet to read any later siblings.
+    return replaySgfOrder && parent.variations.get(0) == this ? parent : null;
+  }
+
+  private void markSetupChanges(BitSet laterPlacements) {
+    if (data.isSnapshotNode()) {
+      BoardHistoryNode parent = previous.orElse(null);
+      if (parent == null) return;
+      for (int index = 0; index < data.stones.length; index++) {
+        // A same-color redeclaration leaves the inherited stone in place.
+        if (data.stones[index] != parent.data.stones[index]) laterPlacements.set(index);
+      }
+    } else if (extraStones != null) {
+      for (ExtraStones stone : extraStones) laterPlacements.set(data.zobrist.index(stone.x, stone.y));
     }
   }
 
@@ -558,6 +672,7 @@ public class BoardHistoryNode {
     BoardData data = this.getData();
     int[] moveNumberList = data.moveNumberList;
     data.moveMNNumber = start;
+    data.hidesInheritedMoveNumbers = start <= 1;
     if (data.isMoveNode() && !data.dummy) {
       int[] move = data.lastMove.get();
       moveNumberList[data.zobrist.index(move[0], move[1])] = start;
@@ -844,62 +959,119 @@ public class BoardHistoryNode {
     return moves;
   }
 
-  public void sync(BoardHistoryNode node) {
-    if (node == null) return;
+  private record SyncPair(BoardHistoryNode target, BoardHistoryNode source) {}
 
-    BoardHistoryNode cur = this;
-    // Compare
-    while (node != null && cur != null) {
-      if (!cur.compare(node)) {
-        BoardData sData = cur.getData();
-        sData.sync(node.getData());
-        cur.extraStones = cloneExtraStones(node.extraStones);
-        cur.hasRemovedStone = node.hasRemovedStone;
-        if (sData.getPlayouts() > 0 && !sData.isSnapshotNode()) {
-          BoardHistoryNode commentSource = cur;
-          sData.setGeneratedComment(() -> SGFParser.formatComment(commentSource));
-        }
-      }
-      cur.syncVariationsFrom(node);
-      cur = cur.next(true).map(n -> n).orElse(null);
-      node = node.next(true).map(n -> n).orElse(null);
-    }
+  public void sync(BoardHistoryNode source) {
+    if (source != null) syncSubtree(source);
   }
 
-  public void syncVariations(BoardHistoryNode node) {
-    if (node == null) return;
-    syncVariationsFrom(node);
+  int syncSubtree(BoardHistoryNode source) {
+    var pending = new ArrayDeque<SyncPair>();
+    pending.add(new SyncPair(this, source));
+    return syncPending(pending);
+  }
+
+  public void syncVariations(BoardHistoryNode source) {
+    if (source == null) return;
+    var pending = new ArrayDeque<SyncPair>();
+    enqueueVariations(source, pending);
+    syncPending(pending);
+  }
+
+  // Detect and apply each change on the same visit so callers can act on descendant changes.
+  private static int syncPending(ArrayDeque<SyncPair> pending) {
+    int firstChangedMove = -1;
+    while (!pending.isEmpty()) {
+      SyncPair pair = pending.removeFirst();
+      BoardHistoryNode target = pair.target();
+      BoardHistoryNode source = pair.source();
+      if (target.syncNode(source)) {
+        int move = source.data.moveNumber;
+        if (firstChangedMove < 0 || move < firstChangedMove) firstChangedMove = move;
+      }
+      target.enqueueVariations(source, pending);
+    }
+    return firstChangedMove;
+  }
+
+  private boolean syncNode(BoardHistoryNode source) {
+    if (matchesPositionAndMetadata(source)) {
+      if (data.hasSameReplayMetadata(source.data)) return false;
+      // Display numbers and the policy for a future replay do not replace local position analysis.
+      data.copyReplayMetadataFrom(source.data);
+    } else {
+      data.sync(source.data);
+      extraStones = cloneExtraStones(source.extraStones);
+      hasRemovedStone = source.hasRemovedStone;
+      if (data.getPlayouts() > 0 && !data.isSnapshotNode()) {
+        data.setGeneratedComment(() -> SGFParser.formatComment(this));
+      }
+    }
+    return true;
   }
 
   public boolean compare(BoardHistoryNode node) {
-    BoardData sData = this.getData();
-    BoardData dData = node.getData();
-    return matchesChildState(sData, dData)
-        && hasEquivalentMetadata(node)
-        && this.numberOfChildren() == node.numberOfChildren();
+    return matchesPositionAndMetadata(node) && data.hasSameReplayMetadata(node.data);
   }
 
-  public void resetMoveNumberList() {
-    // TODO Auto-generated method stub
-    if (!this.previous.isPresent()) return;
-    boolean isNewBranch =
-        this.previous.get().variations.get(0) != this && Lizzie.config.newMoveNumberInBranch;
-    BoardHistoryNode preNode = this.previous().get();
-    this.getData().moveNumber = preNode.getData().moveNumber + 1;
-    this.getData().moveMNNumber =
-        preNode.getData().moveMNNumber > -1 && !isNewBranch
-            ? preNode.getData().moveMNNumber + 1
-            : 1;
-    this.getData().moveNumberList =
-        isNewBranch
-            ? new int[Board.boardWidth * Board.boardHeight]
-            : this.previous.get().getData().moveNumberList.clone();
-    if (getData().isMoveNode())
-      this.getData()
-              .moveNumberList[
-              Board.getIndex(this.getData().lastMove.get()[0], this.getData().lastMove.get()[1])] =
-          isNewBranch ? 1 : this.getData().moveMNNumber;
-    if (this.numberOfChildren() >= 1) this.variations.get(0).resetMoveNumberList();
+  private boolean matchesPositionAndMetadata(BoardHistoryNode node) {
+    return data.moveNumber == node.data.moveNumber
+        && Objects.equals(data.comment, node.data.comment)
+        && matchesNodePosition(data, node.data)
+        && hasEquivalentMetadata(node)
+        && numberOfChildren() == node.numberOfChildren();
+  }
+
+  private void rebuildBranchNumbers() {
+    ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>();
+    pending.add(this);
+    while (!pending.isEmpty()) {
+      BoardHistoryNode node = pending.removeFirst();
+      node.rebuildNumbersFromParent();
+      pending.addAll(node.variations);
+    }
+  }
+
+  private void rebuildNumbersFromParent() {
+    BoardHistoryNode parent = previous.orElseThrow();
+    BoardData inherited = parent.data;
+    boolean side = parent.variations.get(0) != this;
+    boolean restart = side && startsBranchNumberingAtOne();
+    // Reordering siblings keeps absolute move counts, including setup nodes and web placeholders.
+    boolean countedDummy = data.dummy && data.moveNumber != inherited.moveNumber;
+    if (data.dummy && !countedDummy) {
+      // A web trial reservation represents the anchor itself, even at an observed root.
+      data.moveMNNumber = restart ? 0 : inherited.moveMNNumber;
+    } else {
+      // A recorded DD is appended as an explicit dummy pass, even on the main line.
+      data.moveMNNumber = data.isSnapshotNode() && !restart
+          ? inherited.moveMNNumber : inherited.nextMoveMNNumber(restart || countedDummy);
+      parent.initializeRootChildNumber(data, restart);
+      if (restart && data.moveMNNumber == -1) data.moveMNNumber = data.dummy ? 0 : 1;
+    }
+
+    data.hidesInheritedMoveNumbers = restart || (side && countedDummy);
+    for (int i = 0; i < data.stones.length; i++) {
+      data.moveNumberList[i] = !data.hidesInheritedMoveNumbers && data.stones[i] != Stone.EMPTY
+          && data.stones[i] == inherited.stones[i] ? inherited.moveNumberList[i] : 0;
+    }
+    if (data.isMoveNode()) {
+      int[] point = data.lastMove.orElseThrow();
+      int index = data.zobrist.index(point[0], point[1]);
+      if (data.stones[index] == data.lastMoveColor) {
+        data.moveNumberList[index] = data.moveMNNumber >= 0 ? data.moveMNNumber : data.moveNumber;
+      }
+    }
+    if (!data.isSnapshotNode() && extraStones != null) {
+      for (ExtraStones stone : extraStones) {
+        data.moveNumberList[data.zobrist.index(stone.x, stone.y)] = 0;
+      }
+    }
+    String authoredNumber = data.getProperty("MN");
+    if (authoredNumber != null) {
+      data.moveMNNumber = Integer.parseInt(authoredNumber);
+      applyMoveNumber(data.moveMNNumber, true);
+    }
   }
 
   public void setRemovedStone() {
@@ -908,6 +1080,68 @@ public class BoardHistoryNode {
 
   public boolean hasRemovedStone() {
     return hasRemovedStone;
+  }
+
+  /** SGF can retain a node for its comment or markup after its last setup point was erased. */
+  boolean isRedundantPlayerSnapshot() {
+    if (!data.isSnapshotNode() || previous.isEmpty() || hasSetupEdits()) return false;
+    BoardHistoryNode parent = previous.get();
+    // An externally observed snapshot may have an unknown intervening history, even when its
+    // stones match. Only an explicit, unchanged PL with no setup declaration is transparent.
+    var properties = data.getProperties();
+    return (data.blackToPlay ? "B" : "W").equalsIgnoreCase(data.getProperty("PL"))
+        && data.blackToPlay == parent.blackToPlayAfterHistory()
+        && !properties.containsKey("AB") && !properties.containsKey("AW")
+        && !properties.containsKey("AE")
+        && data.stones != null && Arrays.equals(data.stones, parent.data.stones);
+  }
+
+  boolean isUnplayedPlaceholder() {
+    if (!data.isPassNode() || !data.dummy || hasSetupEdits() || previous.isEmpty()) return false;
+    String player = data.getProperty("PL");
+    return !("B".equalsIgnoreCase(player) || "W".equalsIgnoreCase(player))
+        || "B".equalsIgnoreCase(player) == previous.get().blackToPlayAfterHistory();
+  }
+
+  /** Side to play after this path, independent of the first child's preferred display turn. */
+  boolean blackToPlayAfterHistory() {
+    BoardHistoryNode node = this;
+    while (node.previous.isPresent() && node.data.isHistoryActionNode()) {
+      String player = node.data.getProperty("PL");
+      if ("B".equalsIgnoreCase(player)) return true;
+      if ("W".equalsIgnoreCase(player)) return false;
+      if (!node.data.isPassNode() || !node.data.dummy) {
+        return node.data.lastMoveColor == Stone.WHITE;
+      }
+      // An annotation placeholder has no played action of its own.
+      node = node.previous.get();
+    }
+    return node.data.blackToPlay;
+  }
+
+  /** A stored position that requires a new engine history instead of incremental navigation. */
+  public boolean requiresEngineSnapshot() {
+    return data != null
+        && ((data.isSnapshotNode() && !isRedundantPlayerSnapshot())
+            || hasRemovedStone() || data.retainsUncapturedStones());
+  }
+
+  public BoardHistoryNode findEngineSnapshotAnchor() {
+    for (BoardHistoryNode node = this; node != null; node = node.previous().orElse(null)) {
+      if (!node.requiresEngineSnapshot()) continue;
+      BoardData position = node.getData();
+      if (node.previous().isEmpty() && !node.hasRemovedStone() && position.moveNumber == 0
+          && position.lastMove.isEmpty() && position.blackToPlay
+          && Arrays.stream(position.stones).allMatch(Stone::isEmpty)) {
+        return null;
+      }
+      return node;
+    }
+    return null;
+  }
+
+  boolean hasSetupEdits() {
+    return hasRemovedStone() || (extraStones != null && !extraStones.isEmpty());
   }
 
   public void clearAndSyncBoard(boolean stepIn) {
@@ -975,26 +1209,14 @@ public class BoardHistoryNode {
     return Arrays.equals(leftMove.get(), rightMove.get());
   }
 
-  private static boolean matchesChildState(BoardData existing, BoardData candidate) {
-    return Arrays.equals(existing.stones, candidate.stones)
-        && sameLastMove(existing.lastMove, candidate.lastMove)
-        && existing.getNodeKind() == candidate.getNodeKind()
-        && existing.dummy == candidate.dummy
-        && existing.moveNumber == candidate.moveNumber
-        && existing.blackToPlay == candidate.blackToPlay
-        && existing.lastMoveColor == candidate.lastMoveColor
-        && Objects.equals(existing.comment, candidate.comment);
+  static boolean matchesPlayedAction(BoardData existing, BoardData candidate) {
+    // A later setup edit can make the capture policy observable even when today's stones match.
+    return existing.playedWithoutCaptures == candidate.playedWithoutCaptures
+        && matchesNodePosition(existing, candidate);
   }
 
-  private static boolean matchesVariationIdentity(
-      BoardHistoryNode existingChild, BoardData candidate) {
-    return matchesVariationIdentity(existingChild, candidate, false, null);
-  }
-
-  private static boolean matchesMoveIdentity(BoardData existing, BoardData candidate) {
-    return existing.isHistoryActionNode()
-        && candidate.isHistoryActionNode()
-        && existing.getNodeKind() == candidate.getNodeKind()
+  private static boolean matchesNodePosition(BoardData existing, BoardData candidate) {
+    return existing.getNodeKind() == candidate.getNodeKind()
         && existing.dummy == candidate.dummy
         && sameLastMove(existing.lastMove, candidate.lastMove)
         && existing.blackToPlay == candidate.blackToPlay
@@ -1004,25 +1226,14 @@ public class BoardHistoryNode {
         && Arrays.equals(existing.stones, candidate.stones);
   }
 
-  private static boolean matchesVariationIdentity(
-      BoardHistoryNode existingChild,
-      BoardData candidate,
-      boolean candidateHasRemovedStone,
-      ArrayList<ExtraStones> candidateExtraStones) {
-    BoardData existingData = existingChild.data;
-    if (!matchesChildState(existingData, candidate)) {
-      return false;
-    }
-    if (!existingData.isSnapshotNode() || !candidate.isSnapshotNode()) {
-      return true;
-    }
-    return hasSameSnapshotMetadataSignature(
-        existingData,
-        existingChild.hasRemovedStone,
-        existingChild.extraStones,
-        candidate,
-        candidateHasRemovedStone,
-        candidateExtraStones);
+  private static boolean matchesVariationIdentity(BoardHistoryNode child, BoardData candidate) {
+    BoardData existing = child.data;
+    if (existing.moveNumber != candidate.moveNumber
+        || !Objects.equals(existing.comment, candidate.comment)) return false;
+    if (!candidate.isSnapshotNode()) return matchesPlayedAction(existing, candidate);
+    return matchesNodePosition(existing, candidate)
+        && hasSameSnapshotMetadataSignature(
+            existing, child.hasRemovedStone, child.extraStones, candidate, false, null);
   }
 
   private void alignParentTurnStateWithFirstActionChild(BoardData childData) {
@@ -1056,17 +1267,12 @@ public class BoardHistoryNode {
     return addOrGoto(sourceChild.getData().clone(), index > 0);
   }
 
-  private void syncVariationsFrom(BoardHistoryNode sourceNode) {
-    int sourceChildren = sourceNode.numberOfChildren();
-    for (int i = 0; i < sourceChildren; i++) {
-      Optional<BoardHistoryNode> sourceChild = sourceNode.getVariation(i);
-      if (!sourceChild.isPresent()) {
-        continue;
-      }
-      BoardHistoryNode child = ensureVariation(i, sourceChild.get());
-      child.sync(sourceChild.get());
+  private void enqueueVariations(BoardHistoryNode source, ArrayDeque<SyncPair> pending) {
+    for (int i = 0; i < source.variations.size(); i++) {
+      BoardHistoryNode child = source.variations.get(i);
+      pending.addLast(new SyncPair(ensureVariation(i, child), child));
     }
-    trimVariationsToSize(sourceChildren);
+    trimVariationsToSize(source.variations.size());
   }
 
   private void trimVariationsToSize(int expectedSize) {

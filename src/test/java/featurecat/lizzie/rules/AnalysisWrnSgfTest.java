@@ -48,7 +48,7 @@ class AnalysisWrnSgfTest {
   void setUp() throws Exception {
     previousResources = Lizzie.resourceBundle;
     harness = RulesLayerTestHarness.open();
-    Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.ENGLISH);
+    Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.US);
   }
 
   @AfterEach

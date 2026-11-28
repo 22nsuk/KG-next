@@ -93,13 +93,6 @@ final class TeacherBoardContext {
             add(data);
           }
         };
-    source
-        .previous()
-        .filter(previous -> previous.getData().stones.length == frozen.stones.length)
-        .ifPresent(
-            previous ->
-                new BoardHistoryNode(previous.getData().clone())
-                    .setPreviousForChild(history.getCurrentHistoryNode()));
     List<Frame> frames = new ArrayList<>();
     frames.add(new Frame(List.copyOf(Arrays.asList(frozen.stones.clone())), "", "", 0));
     List<String> accepted = new ArrayList<>();
@@ -117,7 +110,8 @@ final class TeacherBoardContext {
         history.place(xy[0], xy[1], color, false, false, false, false, false);
       }
       BoardData after = history.getData();
-      if (after == before) {
+      if (after == before || (accepted.isEmpty() && after.isMoveNode()
+          && firstMoveRepeatsPosition(source, after))) {
         break;
       }
       accepted.add(move);
@@ -137,6 +131,19 @@ final class TeacherBoardContext {
         List.copyOf(accepted),
         List.copyOf(frames),
         truncated || accepted.size() != moves.size());
+  }
+
+  private static boolean firstMoveRepeatsPosition(BoardHistoryNode source, BoardData move) {
+    if (BoardHistoryList.violatesKoRule(source, move)) return true;
+    // Two observed diagrams can record a capture without identifying the intervening move.
+    // A teacher line must not present an immediate return to the prior diagram as legal.
+    BoardData diagram = source.getData();
+    return diagram.isSnapshotNode()
+        && diagram.getProperty("PL") == null && diagram.getProperty("AB") == null
+        && diagram.getProperty("AW") == null && diagram.getProperty("AE") == null
+        && source.previous().map(BoardHistoryNode::getData)
+            .filter(previous -> previous.stones.length == diagram.stones.length)
+            .map(previous -> move.zobrist.equals(previous.zobrist)).orElse(false);
   }
 
   static String normalizeMove(String move, int width, int height) {

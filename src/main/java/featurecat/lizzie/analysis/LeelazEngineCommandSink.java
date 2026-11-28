@@ -66,7 +66,7 @@ public final class LeelazEngineCommandSink implements EngineCommandSink {
     if (preparedRestore.isPresent()) {
       preparedRestore.orElseThrow().execute();
       if (resumePonder) {
-        engine.ponder();
+        engine.ponderIfAnalysisControlAllows();
       }
       if (TrialDiag.ENABLED) {
         System.out.printf(
@@ -94,7 +94,7 @@ public final class LeelazEngineCommandSink implements EngineCommandSink {
 
     // 序列发完，再启动 ponder。这时 KataGo 已稳定到 target 局面，info 行才会针对正确盘面
     if (resumePonder) {
-      engine.ponder();
+      engine.ponderIfAnalysisControlAllows();
     }
 
     if (TrialDiag.ENABLED) {

@@ -148,8 +148,9 @@ class TeacherBoardContextTest {
     assertFalse(position.board.facts(Locale.KOREAN).contains("Move shapes"));
   }
 
-  @Test
-  void firstReplayMoveRespectsSimpleKoFromThePreviousPosition() {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void firstReplayMoveRespectsSimpleKoFromThePreviousPosition(boolean recordedCapture) {
     BoardData before = BoardData.empty(19, 19);
     // B captures the single W stone at B17 by playing B18; W cannot immediately recapture.
     stone(before, 1, 2, Stone.WHITE);
@@ -165,6 +166,13 @@ class TeacherBoardContextTest {
     after.stones[Board.getIndex(1, 1)] = Stone.BLACK;
     after.zobrist = hash(after.stones);
     after.blackToPlay = false;
+    if (recordedCapture) {
+      BoardData capture = BoardData.move(after.stones, new int[] {1, 1}, Stone.BLACK, false,
+          after.zobrist, 1, new int[361], 1, 0, 50, 0);
+      previous = append(previous, capture);
+      after.blackCaptures = 1;
+      after.setProperty("PL", "W");
+    }
     BoardHistoryNode node = append(previous, after);
     node.getData().bestMoves = List.of(candidate("B17", List.of("B17", "T1")));
 

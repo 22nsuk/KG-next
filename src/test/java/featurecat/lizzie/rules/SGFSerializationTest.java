@@ -56,6 +56,42 @@ class SGFSerializationTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  void recoloredSetupSavesOneDeclarationPerPoint(boolean legacyDoubleDeclaration)
+      throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      String removals = legacyDoubleDeclaration ? "AE[aa][ab][cc][dc]" : "AE[cc][dc]";
+      BoardHistoryList source = SGFParser.parseSgf(
+          "(;FF[4]SZ[5]AB[bb][dc]AW[ab];B[aa];" + removals
+              + "AW[aa]AB[ab][bb]N[setup]C[setup comment];W[])",
+          true);
+      BoardHistoryNode sourceMove = source.getStart().next().orElseThrow();
+      BoardData sourceSetup = sourceMove.next().orElseThrow().getData();
+      assertEquals(Stone.WHITE, sourceSetup.stones[source.getIndex(0, 0)]);
+      assertEquals(Stone.BLACK, sourceSetup.stones[source.getIndex(0, 1)]);
+
+      String saved = SGFParser.captureSave(Lizzie.board, source, false);
+      BoardHistoryList reopened = SGFParser.parseSgf(saved, true);
+      BoardHistoryNode move = reopened.getStart().next().orElseThrow();
+      BoardHistoryNode setup = move.next().orElseThrow();
+      BoardData data = setup.getData();
+
+      assertTrue(data.isSnapshotNode());
+      assertEquals(List.of("cc", "dc"), data.getPropertyValues("AE").stream().sorted().toList());
+      assertEquals(List.of("ab", "bb"), data.getPropertyValues("AB").stream().sorted().toList());
+      assertEquals(List.of("aa"), data.getPropertyValues("AW"));
+      assertArrayEquals(sourceSetup.stones, data.stones);
+      assertEquals(move.getData().blackCaptures, data.blackCaptures);
+      assertEquals(move.getData().whiteCaptures, data.whiteCaptures);
+      assertEquals(move.getData().moveNumber, data.moveNumber);
+      assertEquals(0, data.moveNumberList[reopened.getIndex(0, 0)]);
+      assertEquals("setup", data.getProperty("N"));
+      assertEquals("setup comment", data.comment);
+      assertTrue(setup.next().orElseThrow().getData().isPassNode());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   void analysisOutputKeepsBothEngineFormatsAndLongTokenLists(boolean kata) throws Exception {
     try (var ignored = RulesLayerTestHarness.open()) {
       BoardData data = Lizzie.board.getData();

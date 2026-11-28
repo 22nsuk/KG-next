@@ -111,6 +111,7 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - 这些根节点 setup 语义不进入真实 movelist、save-load movelist、引擎 `clear_board + moveList` 历史重放。
 - 涉及引擎同步时，`setup` 删除石子直接触发 `FORCE_REBUILD`。
 - `removed-stone/setup` 形成的静态局面由最近一个 `SNAPSHOT` 锚点定义。
+- 非根 SGF 节点若只重申当前行棋方（`PL`），且棋子与父节点一致、没有布子声明，则保留该节点的注释和标记，并沿用此前的着手与劫争历史。
 - 引擎恢复这段局面时，先从最近 `SNAPSHOT` 恢复静态局面和 setup 元数据，再续接后面的真实 `MOVE/PASS`。
 - 分支切换、任意跳转、关闭后重开引擎后的 board restore 也属于导航 / 恢复入口，命中最近 `SNAPSHOT`，尤其 `removed-stone/setup SNAPSHOT` 时，先恢复该静态锚点，再续接后面的真实 `MOVE/PASS`。
 - 静态 `SNAPSHOT` / setup / `removed-stone` 恢复到引擎后的结果盘面必须与该 `SNAPSHOT` 盘面完全一致。

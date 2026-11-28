@@ -42,6 +42,8 @@ public final class ExactSnapshotEngineRestore {
   static final String UNSUPPORTED_WHITE_TO_PLAY_DETAIL =
       "Remote exact snapshot restore cannot represent a white-to-play position with an "
           + "empty real tail.";
+  static final String ZERO_LIBERTY_POSITION_DETAIL =
+      "The recorded position contains a group with no liberties. Go analysis cannot replay this history.";
   private static final ScheduledExecutorService DELETE_EXECUTOR =
       Executors.newSingleThreadScheduledExecutor(ExactSnapshotEngineRestore::newCleanupThread);
 
@@ -133,20 +135,16 @@ public final class ExactSnapshotEngineRestore {
     private final boolean initialHandicap;
     private final boolean emptyOrigin;
 
-    private FrozenHistoryPosition(BoardHistoryNode target, int handicap, Double komi) {
-      SnapshotAnchor anchor = RestorePlan.findSnapshotAnchor(target);
-      if (anchor == null) {
-        BoardHistoryNode root = RestorePlan.findHistoryOrigin(target);
-        anchor = new SnapshotAnchor(root, root.getData());
-      }
-      snapshot = anchor.data.clone();
+    private FrozenHistoryPosition(
+        BoardHistoryNode target, BoardHistoryNode anchor, int handicap, Double komi) {
+      snapshot = anchor.getData().clone();
       int[] size = resolveSnapshotBoardSize(snapshot);
       snapshot.setProperty("SZ", formatBoardSizeTag(size[0], size[1]));
-      tail = List.copyOf(RestorePlan.captureTail(target, anchor.node, size[0], size[1]));
+      tail = List.copyOf(RestorePlan.captureTail(target, anchor, size[0], size[1]));
       this.komi = komi;
-      initialHandicap = InitialHandicapSetup.isInitialHandicap(anchor.node, handicap, size[0], size[1])
+      initialHandicap = InitialHandicapSetup.isInitialHandicap(anchor, handicap, size[0], size[1])
           && !snapshot.blackToPlay;
-      boolean empty = !anchor.node.previous().isPresent() && snapshot.blackToPlay;
+      boolean empty = !anchor.previous().isPresent() && snapshot.blackToPlay;
       if (snapshot.stones == null) {
         empty = false;
       } else {
@@ -172,7 +170,9 @@ public final class ExactSnapshotEngineRestore {
   public static FrozenHistoryPosition freezeHistoryPosition(
       BoardHistoryNode target, int handicap, Double komi) {
     if (target == null) throw new IllegalArgumentException("target");
-    return new FrozenHistoryPosition(target, handicap, komi);
+    BoardHistoryNode anchor = target.findEngineSnapshotAnchor();
+    if (anchor == null) anchor = RestorePlan.findHistoryOrigin(target);
+    return new FrozenHistoryPosition(target, anchor, handicap, komi);
   }
 
   private static void validateCurrentPosition(BoardData sourceData) {
@@ -216,6 +216,9 @@ public final class ExactSnapshotEngineRestore {
   private static Completion execute(RestorePlan plan) {
     RestoreLifecycle lifecycle = null;
     try {
+      if (plan.unsupportedSetup) {
+        throw new Failure(FailureCategory.SNAPSHOT_PREPARATION, ZERO_LIBERTY_POSITION_DETAIL);
+      }
       List<Leelaz> remoteTargets = new ArrayList<>();
       List<Leelaz> localTargets = new ArrayList<>();
       for (Leelaz target : plan.targetEngines) {
@@ -823,6 +826,11 @@ public final class ExactSnapshotEngineRestore {
       this.plan = plan;
     }
 
+    /** The owner must keep ordinary forwarding gated even if navigation supersedes this restore. */
+    public boolean hasUnsupportedSetup() {
+      return plan.unsupportedSetup;
+    }
+
     public Completion execute() {
       if (!executed.compareAndSet(false, true)) {
         throw new IllegalStateException("Exact snapshot restore has already been executed");
@@ -851,6 +859,7 @@ public final class ExactSnapshotEngineRestore {
     private final Leelaz.ExactSnapshotRestoreAdmission admission;
     private final boolean initialHandicap;
     private final boolean emptyOrigin;
+    private final boolean unsupportedSetup;
 
     private RestorePlan(
         Leelaz engine,
@@ -874,6 +883,12 @@ public final class ExactSnapshotEngineRestore {
       this.preclear = admission.preclear();
       this.initialHandicap = initialHandicap;
       this.emptyOrigin = emptyOrigin;
+      // Native loadsgf can install a static diagram on engines that support it. KataGo and
+      // set_position require liberties; a suppressed capture also loses the original move history.
+      this.unsupportedSetup = this.snapshotData.stones != null
+          && EngineSetup.hasGroupWithoutLiberty(this.snapshotData.stones, boardWidth, boardHeight)
+          && (this.snapshotData.retainsUncapturedStones() || targetEngines.stream()
+              .anyMatch(target -> target.isKatago || target.requiresInBandSnapshotRestore(admission)));
     }
 
     private static Optional<RestorePlan> capture(
@@ -902,21 +917,18 @@ public final class ExactSnapshotEngineRestore {
       if (target == null) {
         throw new IllegalArgumentException("target");
       }
-      SnapshotAnchor anchor = findSnapshotAnchor(target);
-      if (anchor == null && allowHistoryOrigin) {
-        BoardHistoryNode origin = findHistoryOrigin(target);
-        BoardData originData = origin.getData();
-        validateCurrentPosition(originData);
-        anchor = new SnapshotAnchor(origin, originData);
-      }
+      BoardHistoryNode anchor = target.findEngineSnapshotAnchor();
+      if (anchor == null && !allowHistoryOrigin) return Optional.empty();
+      BoardHistoryNode origin = findHistoryOrigin(target);
       if (anchor == null) {
-        return Optional.empty();
+        validateCurrentPosition(origin.getData());
+        anchor = origin;
       }
       BoardHistoryList history = Lizzie.board == null ? null : Lizzie.board.getHistory();
       int handicap = history == null || history.getGameInfo() == null
-          || history.getStart() != findHistoryOrigin(target)
-          ? 0 : history.getGameInfo().getHandicap();
-      FrozenHistoryPosition frozen = freezeHistoryPosition(target, handicap, captureHistoryKomi());
+          || history.getStart() != origin ? 0 : history.getGameInfo().getHandicap();
+      FrozenHistoryPosition frozen =
+          new FrozenHistoryPosition(target, anchor, handicap, captureHistoryKomi());
       return Optional.of(new RestorePlan(engine, mirrorEngine, frozen.snapshot, frozen.tail,
           frozen.komi, admission, frozen.initialHandicap, frozen.emptyOrigin));
     }
@@ -940,6 +952,9 @@ public final class ExactSnapshotEngineRestore {
       requireEngine(engine);
       engine.requireExactSnapshotRestoreAdmission(admission);
       validateCurrentPosition(sourceData);
+      if (sourceData.retainsUncapturedStones()) {
+        throw new Failure(FailureCategory.SNAPSHOT_PREPARATION, ZERO_LIBERTY_POSITION_DETAIL);
+      }
       BoardData snapshotData =
           sourceData.isSnapshotNode() ? sourceData : materializeCurrentPosition(sourceData);
       return new RestorePlan(
@@ -957,34 +972,6 @@ public final class ExactSnapshotEngineRestore {
       }
     }
 
-    private static SnapshotAnchor findSnapshotAnchor(BoardHistoryNode target) {
-      for (BoardHistoryNode node = target; node != null; node = node.previous().orElse(null)) {
-        BoardData data = node.getData();
-        if (data != null && (node.hasRemovedStone() || isUsableSnapshotAnchor(node, data))) {
-          return new SnapshotAnchor(node, data);
-        }
-      }
-      return null;
-    }
-
-    private static boolean isUsableSnapshotAnchor(BoardHistoryNode node, BoardData data) {
-      if (!data.isSnapshotNode()) {
-        return false;
-      }
-      if (node.previous().isPresent()
-          || data.moveNumber > 0
-          || data.lastMove.isPresent()
-          || !data.blackToPlay) {
-        return true;
-      }
-      for (Stone stone : data.stones) {
-        if (stone.isBlack() || stone.isWhite()) {
-          return true;
-        }
-      }
-      return false;
-    }
-
     private static List<TailAction> captureTail(
         BoardHistoryNode target, BoardHistoryNode snapshotAnchor, int boardWidth, int boardHeight) {
       List<TailAction> reversedTail = new ArrayList<>();
@@ -998,16 +985,6 @@ public final class ExactSnapshotEngineRestore {
       }
       Collections.reverse(reversedTail);
       return reversedTail;
-    }
-  }
-
-  private static final class SnapshotAnchor {
-    private final BoardHistoryNode node;
-    private final BoardData data;
-
-    private SnapshotAnchor(BoardHistoryNode node, BoardData data) {
-      this.node = node;
-      this.data = data;
     }
   }
 

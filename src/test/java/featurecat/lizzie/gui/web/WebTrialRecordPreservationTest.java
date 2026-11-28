@@ -5,11 +5,17 @@ import static org.junit.jupiter.api.Assertions.*;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineFollowController;
+import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.LeelazEngineCommandSink;
+import featurecat.lizzie.gui.BoardRenderer;
+import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.RulesLayerTestHarness;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.gui.VariationTreeTrialCapture;
@@ -38,6 +44,274 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class WebTrialRecordPreservationTest {
   @TempDir Path directory;
+
+  @ParameterizedTest
+  @CsvSource({"true, edit", "false, edit", "true, exit", "false, idle", "true, settledExit",
+      "true, userPause"})
+  void setupEditRetiresWebTrialBeforeRestoringEditedCursor(boolean analyzing, String exit)
+      throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture(false);
+        var rules = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[5]AB[aa]PL[B];W[ee](;B[bb])(;B[cc]))", true);
+      BoardHistoryNode anchor = history.getStart().next().orElseThrow();
+      history.setHead(anchor);
+      board.setHistory(history);
+      CountDownLatch confirmed = new CountDownLatch(1);
+      CountDownLatch navigating = new CountDownLatch(1);
+      CountDownLatch finishNavigation = new CountDownLatch(1);
+      boolean userPauses = exit.equals("userPause");
+      AtomicBoolean resumedAfterPause = new AtomicBoolean();
+      Leelaz engine = new Leelaz("") {
+        @Override public boolean isStarted() { return true; }
+        @Override public void ponder() {
+          if (Lizzie.frame.isUserAnalysisPaused()) resumedAfterPause.set(true);
+          Pondering();
+        }
+        @Override public void togglePonder() { notPondering(); }
+        @Override public void notPondering() {
+          if (!SwingUtilities.isEventDispatchThread() && navigating.getCount() != 0) {
+            if (!userPauses) super.notPondering();
+            navigating.countDown();
+            await(finishNavigation);
+          }
+          super.notPondering();
+          if (SwingUtilities.isEventDispatchThread() && board.getHistory() != history
+              && !board.isEngineAlignmentPending()) {
+            confirmed.countDown();
+          }
+        }
+      };
+      engine.isLoaded = true;
+      EngineManager.isEmpty = false;
+      Lizzie.setPrimaryEngine(engine);
+      var transport = ExactSnapshotRestoreProtocolFixture.install(engine,
+          command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      f.manager.setOverrideSinkForTest(Lizzie.frame::setDisplayNodeOverride);
+      EngineFollowController controller = new EngineFollowController(new LeelazEngineCommandSink());
+      controller.setCurrentEngineNode(anchor);
+      f.manager.setEngineFollowController(controller);
+      Lizzie.engineFollowController = controller;
+      f.enter();
+      if (analyzing) engine.ponder();
+      BoardHistoryNode desktopNode = anchor.getVariation(1).orElseThrow();
+      f.send(f.owner, "trial_navigate", "childIndex", 0);
+      try {
+        await(navigating);
+        if (userPauses) {
+          SwingUtilities.invokeAndWait(Lizzie.frame::togglePonderMannul);
+          assertTrue(Lizzie.frame.isUserAnalysisPaused());
+        }
+        history.setHead(desktopNode);
+        f.enqueue(f.owner, "trial_reset");
+        if (!exit.equals("edit")) {
+          // The edit has published the replacement, but its desktop sync has not yet run.
+          LizzieFrame.boardRenderer = new BoardRenderer(false) {
+            @Override public void clearAfterMove() {
+              if (exit.equals("idle")) f.events.timers.get(f.events.timers.size() - 1).callback.run();
+              else f.send(f.owner, "exit_trial");
+              if (exit.equals("settledExit")) {
+                finishNavigation.countDown();
+                try {
+                  controller.awaitIdle();
+                } catch (Exception failure) {
+                  throw new AssertionError(failure);
+                }
+              }
+            }
+          };
+        }
+        SwingUtilities.invokeAndWait(() -> board.editMove(new int[] {0, 0}, false, true));
+        f.events.drain();
+        f.manager.trialReset("owner");
+        f.manager.trialNavigateForward("owner", 0);
+        assertNull(f.manager.getTrialOwnerForTest());
+        BoardHistoryNode edited = board.getHistory().getCurrentHistoryNode();
+        assertNotSame(desktopNode, edited);
+        assertArrayEquals(new int[] {2, 2}, edited.getData().lastMove.orElseThrow());
+        assertEquals(Stone.EMPTY, edited.getData().stones[Board.getIndex(0, 0)]);
+        assertSame(edited, Lizzie.frame.getDisplayNode());
+        if (!exit.equals("settledExit")) {
+          assertTrue(transport.commands().isEmpty(), "the trial still owns the engine");
+        }
+      } finally {
+        finishNavigation.countDown();
+        controller.awaitIdle();
+      }
+      await(confirmed);
+      SwingUtilities.invokeAndWait(() -> assertEquals(analyzing && !userPauses, engine.isPondering()));
+      assertFalse(resumedAfterPause.get());
+      assertEquals(List.of("play W E1", "play B B4", "play W E1", "play B C3"), transport.commands().stream()
+          .filter(command -> command.startsWith("play ")).toList());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"reset", "back", "forward", "child"})
+  void directNavigationCannotPublishAReplacedHistory(String operation) throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.manager.applyTrialMove("owner", 1, 1);
+      BoardHistoryNode child = f.display.get();
+      if (operation.equals("forward") || operation.equals("child")) f.manager.trialReset("owner");
+      BoardHistoryNode before = f.display.get();
+      f.events.publications.clear();
+      f.board.setHistory(new BoardHistoryList(BoardData.empty(Board.boardWidth, Board.boardHeight)));
+      switch (operation) {
+        case "reset" -> f.manager.trialReset("owner");
+        case "child" -> f.manager.trialNavigateForward("owner", f.anchor.variations.indexOf(child));
+        default -> f.manager.trialNavigate("owner", operation);
+      }
+      assertSame(before, f.display.get());
+      assertTrue(f.events.publications.isEmpty());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+  void setupHistoryCopiesKeepOnlyGameOwnedPlaceholders(boolean authored, boolean mirror)
+      throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture(false);
+        var rules = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[5]AB[aa]" + (authored ? ";DD[true]C[author]" : "") + ")", true);
+      history.toStart();
+      board.setHistory(history);
+      f.enter();
+      assertEquals(1, history.getStart().numberOfChildren());
+      assertTrue(history.getStart().getVariations().get(0).getData().dummy);
+      if (mirror) board.SpinAndMirror(3);
+      else board.editMove(new int[] {0, 0}, false, true);
+      assertNull(f.manager.getTrialOwnerForTest());
+      for (int step = 0; step < (mirror ? 1 : 3); step++) {
+        if (step == 1) board.cleanedit();
+        if (step == 2) board.reedit();
+        BoardHistoryNode root = board.getHistory().getStart();
+        assertEquals(authored ? 1 : 0, root.numberOfChildren());
+        if (authored) assertEquals("author", root.getVariations().get(0).getData().comment);
+        assertEquals(step == 1 ? Stone.BLACK : Stone.EMPTY,
+            root.getData().stones[Board.getIndex(0, 0)]);
+      }
+    }
+  }
+
+  @Test
+  void rejectedSetupEditLeavesTheLiveWebReservationUsable() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture(false);
+        var rules = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]AB[ba]AW[ab]PL[B];B[aa])", true);
+      BoardHistoryNode played = history.getEnd();
+      history.setHead(played);
+      board.setHistory(history);
+      f.enter();
+      BoardHistoryNode placeholder = played.getVariations().get(0);
+      history.toStart();
+      // Turning ba white would make the recorded first move a suicide.
+      board.editMove(new int[] {1, 0}, true, false);
+      assertSame(history, board.getHistory());
+      assertSame(placeholder, played.getVariations().get(0));
+      assertSame(played, f.display.get());
+      f.send(f.owner, "trial_move", "x", 3, "y", 3);
+      assertSame(played.getVariation(1).orElseThrow(), f.display.get());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void editRestoreKeepsAcceptedWebMovesAndRejectsRequestsForTheReplacedTree(boolean redo)
+      throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      board.saveListForEdit();
+      if (redo) board.cleanedit();
+      WebBoardManager manager = new WebBoardManager(new WebTrialTestFixture.Events());
+      manager.setDesktopRefresherForTest(() -> {});
+      FutureTask<Void> lateMove = new FutureTask<>(() -> manager.applyTrialMove("owner", 2, 2), null);
+      Thread web = new Thread(lateMove, "test-trial-move-during-edit-restore");
+      web.setDaemon(true);
+      AtomicBoolean startLateMove = new AtomicBoolean();
+      BoardHistoryList live = new BoardHistoryList(BoardData.empty(5, 5)) {
+        @Override public featurecat.lizzie.analysis.GameInfo getGameInfo() {
+          if (startLateMove.compareAndSet(true, false)) {
+            // Undo/redo carries over the live game info after capturing its return snapshot.
+            web.start();
+            awaitBlockedOn(web, board, lateMove);
+          }
+          return super.getGameInfo();
+        }
+      };
+      try {
+        board.setHistory(live);
+        assertTrue(manager.enterTrial("owner", live.getStart()));
+        manager.applyTrialMove("owner", 1, 1);
+        BoardHistoryNode accepted = live.getStart().getVariation(1).orElseThrow();
+        startLateMove.set(true);
+        if (redo) board.reedit();
+        else board.cleanedit();
+        lateMove.get(5, TimeUnit.SECONDS);
+        assertTrue(accepted.getVariations().isEmpty());
+        if (redo) board.cleanedit();
+        else board.reedit();
+        BoardHistoryNode restored = board.getHistory().getStart().getVariation(1).orElseThrow();
+        assertArrayEquals(new int[] {1, 1}, restored.getData().lastMove.orElseThrow());
+        assertTrue(restored.getVariations().isEmpty());
+      } finally {
+        web.join(5000);
+        manager.stop();
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void setupEditKeepsWebMoveCommittedWhileEditorWaitsForBoard(boolean mirror) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]AB[aa];W[ee])", true);
+      board.setHistory(history);
+      BoardHistoryNode anchor = history.getEnd();
+      history.setHead(anchor);
+      WebBoardManager manager = new WebBoardManager(new WebTrialTestFixture.Events());
+      manager.setDesktopRefresherForTest(() -> {});
+      assertTrue(manager.enterTrial("owner", anchor));
+
+      FutureTask<Void> edit = new FutureTask<>(() -> {
+        if (mirror) board.SpinAndMirror(3);
+        else board.editMove(new int[] {0, 0}, false, true);
+        return null;
+      });
+      Thread editor = new Thread(edit, "test-desktop-setup-edit");
+      editor.setDaemon(true);
+      try {
+        synchronized (board) {
+          editor.start();
+          awaitBlockedOn(editor, board, edit);
+          manager.applyTrialMove("owner", 1, 2);
+          assertEquals(2, anchor.numberOfChildren());
+        }
+        edit.get(5, TimeUnit.SECONDS);
+        manager.applyTrialMove("owner", 3, 3);
+        assertEquals(0, anchor.getVariation(1).orElseThrow().numberOfChildren(),
+            "a command from the replaced history cannot extend the old web variation");
+        manager.exitTrial("owner");
+        for (BoardHistoryList result : List.of(board.getHistory(),
+            SGFParser.parseSgf(save(board, false, false), true))) {
+          BoardHistoryNode edited = result.getStart().next().orElseThrow();
+          assertEquals(Stone.EMPTY, edited.getData().stones[Board.getIndex(0, 0)]);
+          assertEquals(mirror ? Stone.BLACK : Stone.EMPTY,
+              edited.getData().stones[Board.getIndex(4, 0)]);
+          assertEquals(2, edited.numberOfChildren(), "the accepted web variation survives the edit");
+          assertArrayEquals(new int[] {mirror ? 3 : 1, 2},
+              edited.getVariation(1).orElseThrow().getData().lastMove.orElseThrow());
+        }
+      } finally {
+        editor.join(5000);
+        manager.stop();
+      }
+    }
+  }
 
   @ParameterizedTest
   @ValueSource(strings = {

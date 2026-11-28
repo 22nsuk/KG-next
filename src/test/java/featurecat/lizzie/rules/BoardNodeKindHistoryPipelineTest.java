@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
-import featurecat.lizzie.analysis.AnalysisEngine;
+import featurecat.lizzie.analysis.AnalysisRequestBuilder;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
 import featurecat.lizzie.analysis.KataGoRules;
@@ -349,22 +349,11 @@ class BoardNodeKindHistoryPipelineTest {
       BoardHistoryNode pass = snapshot.add(new BoardHistoryNode(passNode(Stone.BLACK, false, 2)));
       BoardHistoryNode move = pass.add(new BoardHistoryNode(moveNode(0, 0, Stone.WHITE, true, 3)));
 
-      BoardHistoryNode anchor =
-          (BoardHistoryNode)
-              requireMethod(AnalysisEngine.class, "findSnapshotAnchor", BoardHistoryNode.class)
-                  .invoke(null, move);
-      @SuppressWarnings("unchecked")
-      List<String[]> moves =
-          (List<String[]>)
-              requireMethod(AnalysisEngine.class, "collectHistoryActions", BoardHistoryNode.class)
-                  .invoke(null, move);
-
-      assertTrue(anchor.getData().isSnapshotNode(), "analysis scan should anchor on the snapshot.");
-      assertEquals(2, moves.size(), "analysis scan should skip snapshots and keep both actions.");
-      assertArrayEquals(
-          new String[] {"B", "pass"}, moves.get(0), "first action should be the real pass.");
-      assertArrayEquals(
-          new String[] {"W", "A3"}, moves.get(1), "second action should be the real move.");
+      assertSame(snapshot, move.findEngineSnapshotAnchor());
+      Lizzie.config.analysisSpecificRules = "";
+      var request = AnalysisRequestBuilder.buildRequest("scan", move, 10, false, false, false);
+      assertEquals(List.of(List.of("B", "pass"), List.of("W", "A3")),
+          request.getJSONArray("moves").toList());
     } finally {
       env.close();
     }
@@ -3629,7 +3618,7 @@ class BoardNodeKindHistoryPipelineTest {
 
       String exportedSetup = generateNode(setupNode);
       assertEquals(
-          ";PL[W]AB[aa]AE[bb]AW[cc]",
+          ";PL[W]AE[bb]AB[aa]AW[cc]",
           exportedSetup,
           "setup export should deduplicate AB/AW/AE by semantic stone set.");
 
@@ -4557,7 +4546,7 @@ class BoardNodeKindHistoryPipelineTest {
     try {
       activatePrimaryEngine(engine);
       BoardHistoryList history =
-          SGFParser.parseSgf("(;SZ[3]AB[aa]PL[W];W[bb];B[cc];AE[aa]AB[ba])", false);
+          SGFParser.parseSgf("(;SZ[3]AB[aa]PL[W];W[bb];B[cc];PL[W];AE[aa]AB[ba])", false);
       while (history.next().isPresent()) {}
       BoardHistoryNode laterSnapshot = history.getCurrentHistoryNode();
       laterSnapshot.addExtraStones(2, 0, true);
@@ -4584,6 +4573,15 @@ class BoardNodeKindHistoryPipelineTest {
       assertSame(target, Lizzie.board.getHistory().getCurrentHistoryNode());
       assertArrayEquals(target.getData().stones, engine.copyStones());
       assertEquals(target.getData().blackToPlay, engine.isBlackToPlay());
+      assertTrue(commands.contains("play B C1"), "the redundant PL must retain the last move");
+
+      commands.clear();
+      assertTrue(Lizzie.board.previousMove(false));
+      assertTrue(Lizzie.board.nextMove(false));
+      assertSame(target, Lizzie.board.getHistory().getCurrentHistoryNode());
+      assertFalse(commands.stream().anyMatch(command ->
+          command.equals("undo") || command.equals("clear_board") || command.startsWith("play ")
+              || command.startsWith("loadsgf ")), commands.toString());
     } finally {
       env.close();
     }

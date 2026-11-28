@@ -2,17 +2,49 @@ package featurecat.lizzie.gui.web;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
+import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class WebTrialRulesTest {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void persistedTrialMovesFollowTheRecordsNumbering(boolean restart, @TempDir Path directory)
+      throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture(false)) {
+      Lizzie.config = ConfigTestHelper.createForTests(directory);
+      Lizzie.config.newMoveNumberInBranch = restart;
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[19];B[aa]MN[20])", true);
+      history.setHead(history.getEnd());
+      f.board.setHistory(history);
+      f.enter();
+      f.send(f.owner, "trial_move", "x", 1, "y", 1);
+      f.send(f.owner, "trial_move", "x", 2, "y", 2);
+      f.send(f.owner, "exit_trial");
+
+      String saved = SGFParser.saveToString(false);
+      for (BoardHistoryList record : List.of(history, SGFParser.parseSgf(saved, true))) {
+        BoardData tail =
+            record.getMainEnd().getVariation(1).orElseThrow().next().orElseThrow().getData();
+        assertEquals(restart ? 0 : 20, tail.moveNumberList[Board.getIndex(0, 0)]);
+        assertEquals(restart ? 1 : 21, tail.moveNumberList[Board.getIndex(1, 1)]);
+        assertEquals(restart ? 2 : 22, tail.moveNumberList[Board.getIndex(2, 2)]);
+      }
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void replayMatchesColorAndPreservesOriginalContinuation(boolean sameColor) throws Exception {
@@ -46,6 +78,45 @@ class WebTrialRulesTest {
       f.send(f.owner, "trial_move", "x", 3, "y", 3);
       assertNotSame(existing, f.display.get());
       assertTrue(f.display.get().getData().isMoveNode());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, true", "true, false", "false, true", "false, false"})
+  void ordinaryTrialCaptureKeepsTheRecordedNoCaptureBranch(boolean ordinaryBranchExists,
+      boolean capturesNow) throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture(false)) {
+      String ordinary = ordinaryBranchExists ? "(;B[ab]C[capture])" : "";
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[19]AP[KG-next]KGCM[1]PL[B]" + (capturesNow ? "AB[ba]AW[aa]" : "AW[ba][aa]")
+              + "(;B[ab]KGNC[1]C[retain];W[cc])"
+              + ordinary + ")", true);
+      history.toStart();
+      f.board.setHistory(history);
+      BoardHistoryNode root = history.getStart();
+      BoardHistoryNode retained = root.getVariation(0).orElseThrow();
+      BoardHistoryNode continuation = retained.next().orElseThrow();
+      BoardHistoryNode recordedCapture = root.getVariation(1).orElse(null);
+      f.enter();
+
+      f.send(f.owner, "trial_move", "x", 0, "y", 1);
+      BoardHistoryNode capture = f.display.get();
+      assertSame(root.getVariation(1).orElseThrow(), capture);
+      assertEquals(capturesNow ? Stone.EMPTY : Stone.WHITE, capture.getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(capturesNow ? 1 : 0, capture.getData().blackCaptures);
+      if (ordinaryBranchExists) {
+        assertSame(recordedCapture, capture);
+        assertEquals("capture", capture.getData().comment);
+      }
+      assertEquals(2, root.numberOfChildren());
+
+      f.send(f.owner, "trial_reset");
+      f.send(f.owner, "trial_navigate", "childIndex", 0);
+      assertSame(retained, f.display.get());
+      assertEquals("retain", retained.getData().comment);
+      assertEquals(Stone.WHITE, retained.getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(0, retained.getData().blackCaptures);
+      assertSame(continuation, retained.next().orElseThrow());
     }
   }
 
@@ -105,6 +176,8 @@ class WebTrialRulesTest {
         assertNotSame(f.anchor, f.display.get());
         assertEquals(Stone.EMPTY, f.display.get().getData().stones[Board.getIndex(1, 1)]);
         assertEquals(Stone.EMPTY, f.display.get().getData().stones[Board.getIndex(2, 1)]);
+        assertEquals(2, f.display.get().getData().whiteCaptures);
+        assertEquals(0, f.display.get().getData().blackCaptures);
       } else {
         assertSame(f.anchor, f.display.get());
         assertTrue(f.events.publications.isEmpty());

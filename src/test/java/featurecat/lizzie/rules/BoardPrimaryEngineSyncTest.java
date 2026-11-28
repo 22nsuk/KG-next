@@ -365,29 +365,50 @@ class BoardPrimaryEngineSyncTest {
         BoardHistoryList history = SGFParser.parseSgf(sgf, true);
         while (history.next().isPresent()) {}
         Lizzie.board.setHistory(history);
-        Leelaz engine = new Leelaz("");
-        engine.useJavaSSH = true;
-        engine.isLoaded = true;
-        setStarted(engine, true);
-        ExactSnapshotRestoreProtocolFixture.Transport transport =
-            ExactSnapshotRestoreProtocolFixture.install(engine,
-                command -> ExactSnapshotRestoreProtocolFixture.Response.success());
-        java.lang.reflect.Method advertise = Leelaz.class.getDeclaredMethod(
-            "advertiseCommandsForTest", List.class);
-        advertise.setAccessible(true);
-        advertise.invoke(engine, List.of("set_free_handicap"));
-        Lizzie.leelaz = engine;
-        Board.FrozenPrimaryPosition frozen =
-            Lizzie.board.freezeCurrentPositionForPrimaryEngineExactRestore().orElseThrow();
-        assertTrue(frozen.execute());
-        assertTrue(frozen.matchesCurrentBoardAndPrimary());
-        assertEquals(List.of("play W B2"), transport.commands().stream()
-            .filter(command -> command.startsWith("play ")).toList());
-        assertEquals(1, transport.commands().stream()
-            .filter(command -> command.startsWith("set_free_handicap ")).count());
-        assertFalse(transport.commands().stream().anyMatch(command -> command.startsWith("loadsgf ")));
+        assertHandicapAndWhiteTailRestored();
       }
     }
+  }
+
+  @Test
+  void editedHandicapRestoresThroughHandicapOnlyTransportBeforeSaving() throws Exception {
+    BoardHistoryList edited;
+    try (var fixture = RulesLayerTestHarness.open(3)) {
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[3]HA[2]PL[W]AB[aa][cc]AW[ac];W[bb])"));
+      Board board = fixture.board();
+      board.moveToAnyPosition(board.getHistory().getEnd());
+      board.editMove(new int[] {0, 2}, false, true);
+      edited = board.getHistory();
+      assertEquals(Stone.EMPTY, edited.getStart().getData().stones[Board.getIndex(0, 2)]);
+    }
+    try (TestHarness harness = TestHarness.open()) {
+      Lizzie.board.setHistory(edited);
+      assertHandicapAndWhiteTailRestored();
+    }
+  }
+
+  private static void assertHandicapAndWhiteTailRestored() throws Exception {
+    Leelaz engine = new Leelaz("");
+    engine.useJavaSSH = true;
+    engine.isLoaded = true;
+    setStarted(engine, true);
+    ExactSnapshotRestoreProtocolFixture.Transport transport =
+        ExactSnapshotRestoreProtocolFixture.install(engine,
+            command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+    java.lang.reflect.Method advertise = Leelaz.class.getDeclaredMethod(
+        "advertiseCommandsForTest", List.class);
+    advertise.setAccessible(true);
+    advertise.invoke(engine, List.of("set_free_handicap"));
+    Lizzie.leelaz = engine;
+    Board.FrozenPrimaryPosition frozen =
+        Lizzie.board.freezeCurrentPositionForPrimaryEngineExactRestore().orElseThrow();
+    assertTrue(frozen.execute());
+    assertTrue(frozen.matchesCurrentBoardAndPrimary());
+    assertEquals(List.of("play W B2"), transport.commands().stream()
+        .filter(command -> command.startsWith("play ")).toList());
+    assertEquals(1, transport.commands().stream()
+        .filter(command -> command.startsWith("set_free_handicap ")).count());
+    assertFalse(transport.commands().stream().anyMatch(command -> command.startsWith("loadsgf ")));
   }
 
   @Test

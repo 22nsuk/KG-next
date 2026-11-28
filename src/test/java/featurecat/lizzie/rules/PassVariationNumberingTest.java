@@ -9,11 +9,157 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.gui.LizzieFrame;
+import java.util.List;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class PassVariationNumberingTest {
+  @ParameterizedTest
+  @CsvSource({"true,true", "true,false", "false,true", "false,false"})
+  void localVariationsAtLiveEndKeepTheirNumbersAcrossSave(boolean urlGame, boolean restart)
+      throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      Lizzie.config.newMoveNumberInBranch = restart;
+      Board board = env.board();
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5];B[aa]MN[20])", true);
+      history.setHead(history.getMainEnd());
+      board.setHistory(history);
+      LizzieFrame.urlSgf = urlGame;
+      Lizzie.frame.syncBoard = !urlGame;
+
+      BoardHistoryNode fork = env.current();
+      board.place(1, 1, Stone.WHITE);
+      board.pass(Stone.BLACK);
+      board.place(3, 3, Stone.WHITE);
+      history.setHead(fork);
+      board.place(2, 2, Stone.WHITE);
+      assertSame(fork, history.getMainEnd());
+
+      BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      for (BoardHistoryList record : List.of(history, reopened)) {
+        BoardHistoryNode parent = record.getStart().next().orElseThrow();
+        BoardHistoryNode first = parent.getVariation(1).orElseThrow();
+        BoardHistoryNode second = parent.getVariation(2).orElseThrow();
+        assertEquals(restart ? 0 : 20, first.getData().moveNumberList[Board.getIndex(0, 0)]);
+        assertEquals(restart ? 1 : 21, first.getData().moveNumberList[Board.getIndex(1, 1)]);
+        assertEquals(restart ? 1 : 21, second.getData().moveNumberList[Board.getIndex(2, 2)]);
+        BoardData afterPass = first.next().orElseThrow().next().orElseThrow().getData();
+        assertEquals(restart ? 3 : 23, afterPass.moveNumberList[Board.getIndex(3, 3)]);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"promote,true", "up,true", "down,true", "promote,false", "up,false", "down,false"})
+  void reorderingAnEditedSetupBranchKeepsMoveNumbersAcrossSave(String operation, boolean restart)
+      throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(5)) {
+      Lizzie.config.newMoveNumberInBranch = restart;
+      String oldMain = "(;W[cc]MN[7](;B[];W[cd])(;DD[true];B[da]))";
+      String oldSide = "(;AW[dd];W[bb](;B[];W[bc])(;B[ce]MN[10];AB[bb];W[dc]))";
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]AB[ee];B[aa]" + oldMain + oldSide + ")"));
+      Board board = env.board();
+      board.editMove(new int[] {4, 4}, false, true);
+      BoardHistoryNode fork = board.getHistory().getStart().next().orElseThrow();
+      BoardHistoryNode setup = fork.getVariation(1).orElseThrow();
+      BoardHistoryNode white = setup.next().orElseThrow();
+      board.moveToAnyPosition(white);
+      switch (operation) {
+        case "promote" -> assertTrue(board.setAsMainBranch());
+        case "up" -> setup.moveUp();
+        case "down" -> fork.getVariation(0).orElseThrow().moveDown();
+        default -> throw new IllegalArgumentException(operation);
+      }
+      assertSame(setup, fork.next().orElseThrow());
+      assertEquals(2, white.getData().moveNumberList[Board.getIndex(1, 1)]);
+      assertEquals(2, board.moveNumberByXY(1, 1));
+      BoardHistoryList expected =
+          SGFParser.parseSgf("(;SZ[5]AP[KG-next];B[aa]" + oldSide + oldMain + ")", true);
+      assertBranchNumbers(expected.getStart(), board.getHistory().getStart());
+      BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      assertBranchNumbers(expected.getStart(), reopened.getStart());
+    }
+  }
+
+  private static void assertBranchNumbers(BoardHistoryNode expected, BoardHistoryNode actual) {
+    BoardData data = actual.getData();
+    assertEquals(expected.getData().moveNumber, data.moveNumber, "absolute move number");
+    assertEquals(expected.getData().moveMNNumber, data.moveMNNumber, "display counter");
+    assertEquals(expected.getData().hidesInheritedMoveNumbers, data.hidesInheritedMoveNumbers);
+    assertArrayEquals(expected.getData().moveNumberList, data.moveNumberList);
+    assertEquals(expected.numberOfChildren(), actual.numberOfChildren());
+    for (int i = 0; i < expected.numberOfChildren(); i++) {
+      assertBranchNumbers(expected.getVariation(i).orElseThrow(), actual.getVariation(i).orElseThrow());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void promotingAVariationFromAnObservedRootKeepsItsAbsoluteNumber(boolean restart)
+      throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      Lizzie.config.newMoveNumberInBranch = restart;
+      BoardHistoryList history = env.board().getHistory();
+      BoardHistoryNode root = history.getStart();
+      root.getData().moveNumber = 42;
+      history.pass(Stone.BLACK);
+      history.setHead(root);
+      history.place(2, 2, Stone.BLACK, true);
+      assertTrue(env.board().setAsMainBranch());
+      assertEquals(43, history.getData().moveNumberList[Board.getIndex(2, 2)]);
+      assertEquals(43, env.board().moveNumberByXY(2, 2));
+      assertEquals(restart ? 1 : 43, root.getVariation(1).orElseThrow().getData().moveMNNumber);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void reorderingAZeroStepDummyPreservesTheObservedAnchor(boolean restart) throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      Lizzie.config.newMoveNumberInBranch = restart;
+      BoardHistoryList history = env.board().getHistory();
+      BoardHistoryNode root = history.getStart();
+      root.getData().moveNumber = 42;
+      history.pass(Stone.BLACK, false, true);
+      BoardHistoryNode placeholder = env.current();
+      // A web trial reservation copies both counters from its anchor.
+      placeholder.getData().moveNumber = root.getData().moveNumber;
+      placeholder.getData().moveMNNumber = root.getData().moveMNNumber;
+      history.setHead(root);
+      history.place(2, 2, Stone.BLACK, true);
+      assertTrue(env.board().setAsMainBranch());
+      assertEquals(42, placeholder.getData().moveNumber);
+      assertEquals(restart ? 0 : -1, placeholder.getData().moveMNNumber);
+      placeholder.moveUp();
+      assertSame(placeholder, root.getVariation(0).orElseThrow());
+      assertEquals(42, placeholder.getData().moveNumber);
+      assertEquals(-1, placeholder.getData().moveMNNumber);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"normal", "append", "engine-game"})
+  void firstPassAfterObservedRootContinuesItsMoveCount(String entrypoint) throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = env.board().getHistory();
+      history.getData().moveNumber = 42;
+      switch (entrypoint) {
+        case "normal" -> history.pass(Stone.BLACK);
+        case "append" -> {
+          history.pass(Stone.BLACK, false, false, false, true);
+          history.next().orElseThrow();
+        }
+        case "engine-game" -> history.passForEngineGame(Stone.BLACK, true);
+        default -> throw new IllegalArgumentException(entrypoint);
+      }
+      history.place(1, 1, Stone.WHITE);
+      assertEquals(44, history.getData().moveNumberList[Board.getIndex(1, 1)]);
+      assertEquals(44, env.board().moveNumberByXY(1, 1));
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"normal", "branch", "dummy", "append", "engine-game",
       "board", "board-branch", "board-dummy"})

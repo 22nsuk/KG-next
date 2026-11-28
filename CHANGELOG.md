@@ -7,6 +7,8 @@ All notable maintenance updates to this fork are documented here.
 - Extract KataGo `kata-raw-nn` heat-map parsing from `Leelaz`, exclude pass probability from board rows, and keep in-flight responses connected to the current display lists across heat-map resets.
 ### KG-next
 
+- Preserve the rest of a starting position when deleting or recoloring one setup stone. Recalculate later moves and variations, retain comments and SGF metadata through undo, redo and save/reopen, and reject edits that would make a continuation illegal without changing the game. Confirm the edited position with the engine before resuming analysis.
+
 - Expose independent PDA and search breadth (WRN) visibility controls in toolbar customization, add an optional candidate display limit to both toolbar layouts, and make these settings reachable through function search. Correct Korean and Japanese WRN labels and retain existing analysis when display preferences change. See [Toolbar settings](docs/TOOLBAR_SETTINGS.md).
 
 - Keep benchmark speeds linked to the search-thread, NN-server and batch settings that produced them, including accepted extra GPU trials. Persist the measurement source, distinguish older or unmatched recommendations in the result card, and withhold the pre-analysis time estimate when its reference settings cannot be confirmed.

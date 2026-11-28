@@ -1224,19 +1224,23 @@ public class KataGoAnalysisWebSocketTransportTest {
     }
   }
 
-  @Test
-  void rejectedLoadSgfLeavesPreviousPositionUntouched() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"(;FF[4]GM[1]CA[UTF-8]SZ[19]PL[B]AB[aa];W[bb])",
+      "(;FF[4]GM[1]CA[UTF-8]SZ[5:3]KM[5.5]PL[B]AB[db]AB[ec]AB[ca]AB[da]AW[ea]AW[eb])"})
+  void rejectedLoadSgfLeavesPreviousPositionUntouched(String sgf) throws Exception {
     KataGoAnalysisWebSocketTransport transport =
         new KataGoAnalysisWebSocketTransport("ws://127.0.0.1:1");
     Path unsupported = Files.createTempFile("remote-unsupported-", ".sgf");
     try {
       assertEquals("=\n\n", sendGtp(transport, "set_position B A3"));
-      Files.writeString(unsupported, "(;FF[4]GM[1]CA[UTF-8]SZ[19]PL[B]AB[aa];W[bb])");
+      Files.writeString(unsupported, sgf);
 
       String response = sendGtp(transport, "loadsgf " + unsupported);
 
       assertTrue(response.startsWith("?"));
       JSONObject query = transport.buildAnalysisQuery("test", false, false, 50, "W");
+      assertEquals(19, query.getInt("boardXSize"));
+      assertEquals(19, query.getInt("boardYSize"));
       assertEquals(
           java.util.List.of(java.util.List.of("B", "A3")),
           query.getJSONArray("initialStones").toList());

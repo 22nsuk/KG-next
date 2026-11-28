@@ -277,6 +277,21 @@ public class BoardData implements Cloneable {
   //	public boolean commented2=true;
 
   private BoardNodeKind nodeKind;
+  // A move keeps the capture policy used when it was played, even if the UI option changes.
+  boolean playedWithoutCaptures;
+  boolean recordsCaptureModes; // Root provenance, independent of opaque SGF property values.
+  // A branch numbering reset also applies to inherited stones exposed by an edit.
+  boolean hidesInheritedMoveNumbers;
+
+  void inheritMoveNumber(BoardData parent, int index) {
+    moveNumberList[index] = hidesInheritedMoveNumbers ? 0 : parent.moveNumberList[index];
+  }
+
+  void clearInheritedMoveNumbers() {
+    if (moveNumberList == null) moveNumberList = new int[stones.length];
+    else Arrays.fill(moveNumberList, 0);
+    hidesInheritedMoveNumbers = true;
+  }
 
   // Ordered raw SGF values. Replace lists on updates so captured values stay stable.
   private Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
@@ -430,6 +445,13 @@ public class BoardData implements Cloneable {
 
   public boolean isPassNode() {
     return getNodeKind() == BoardNodeKind.PASS;
+  }
+
+  /** Coordinate that can be marked on this position, including an observed snapshot marker. */
+  public Optional<int[]> lastMoveOnBoard(int width, int height) {
+    return lastMove.filter(p -> p.length == 2 && p[0] >= 0 && p[0] < width && p[1] >= 0 && p[1] < height
+        && (lastMoveColor == Stone.BLACK || lastMoveColor == Stone.WHITE)
+        && stones[p[0] * height + p[1]] == lastMoveColor);
   }
 
   /** The next move or pass inherits this variation's number unless it starts a new branch. */
@@ -1244,6 +1266,9 @@ public class BoardData implements Cloneable {
         nodeKind, stones, lastMove, lastMoveColor, blackToPlay, forSave ? null : zobrist, moveNumber,
         forSave ? null : moveNumberList, blackCaptures, whiteCaptures, winrate, playouts);
     data.moveMNNumber = moveMNNumber;
+    data.playedWithoutCaptures = playedWithoutCaptures;
+    data.recordsCaptureModes = recordsCaptureModes;
+    data.hidesInheritedMoveNumbers = hidesInheritedMoveNumbers;
     data.dummy = dummy;
     data.verify = verify;
     data.copyAnalysisStateFrom(this, true, forSave);
@@ -1252,11 +1277,14 @@ public class BoardData implements Cloneable {
   }
 
   /**
-   * Private serialization input, never a playable position: omit the display move-number grid and
-   * position hash. Keep stones for root/setup deltas and detach candidates still edited by renderers.
+   * Private serialization input. Only an observed root needs its stone numbers persisted;
+   * other nodes rebuild theirs during replay. Keep stones for setup deltas and omit the hash.
    */
-  synchronized BoardData copyForSave() {
+  synchronized BoardData copyForSave(boolean root) {
     BoardData copy = copy(true);
+    if (root && isSnapshotNode() && moveNumber > 0) {
+      copy.moveNumberList = copyIntArray(moveNumberList);
+    }
     detachSaveMoves(copy.bestMoves);
     detachSaveMoves(copy.bestMoves2);
     return copy;
@@ -1449,6 +1477,58 @@ public class BoardData implements Cloneable {
     return this.lastMove.map(m -> (m[0] == coord[0] && m[1] == coord[1])).orElse(false);
   }
 
+  /** Apply this move to its private copy of the parent position. Returns the self-capture count. */
+  public int applyMoveToPosition(boolean noCapture) {
+    int[] move = lastMove.orElseThrow();
+    int x = move[0];
+    int y = move[1];
+    stones[zobrist.index(x, y)] = lastMoveColor;
+    zobrist.toggleStone(x, y, lastMoveColor);
+    playedWithoutCaptures = noCapture;
+    if (noCapture) return 0;
+    int captured = removeAdjacentDeadChains(x, y, lastMoveColor.opposite(), stones, zobrist);
+    int selfCaptured = Board.removeDeadChain(x, y, lastMoveColor, stones, zobrist);
+    blackCaptures += lastMoveColor.isBlack() ? captured : selfCaptured;
+    whiteCaptures += lastMoveColor.isBlack() ? selfCaptured : captured;
+    return selfCaptured;
+  }
+
+  /** Would a Go play at this coordinate remove stones that the recorded move retained? */
+  public boolean retainsUncapturedStones() {
+    if (!playedWithoutCaptures || !isMoveNode()) return false;
+    int[] move = lastMove.orElseThrow();
+    Stone[] testStones = stones.clone();
+    Zobrist testHash = zobrist.clone();
+    return removeAdjacentDeadChains(move[0], move[1], lastMoveColor.opposite(),
+            testStones, testHash) > 0
+        || Board.removeDeadChain(move[0], move[1], lastMoveColor, testStones, testHash) > 0;
+  }
+
+  private static int removeAdjacentDeadChains(
+      int x, int y, Stone opponent, Stone[] stones, Zobrist zobrist) {
+    return Board.removeDeadChain(x + 1, y, opponent, stones, zobrist)
+        + Board.removeDeadChain(x, y + 1, opponent, stones, zobrist)
+        + Board.removeDeadChain(x - 1, y, opponent, stones, zobrist)
+        + Board.removeDeadChain(x, y - 1, opponent, stones, zobrist);
+  }
+
+  boolean capturedSingleOpponentSince(BoardData parent) {
+    int captures = lastMoveColor.isBlack()
+        ? blackCaptures - parent.blackCaptures : whiteCaptures - parent.whiteCaptures;
+    return captures == 1;
+  }
+
+  void replaceSetupStone(int index, Stone replacement) {
+    Stone previous = stones[index];
+    if (previous == replacement) return;
+    int x = index / zobrist.height();
+    int y = index % zobrist.height();
+    if (previous != Stone.EMPTY) zobrist.toggleStone(x, y, previous);
+    if (replacement != Stone.EMPTY) zobrist.toggleStone(x, y, replacement);
+    stones[index] = replacement;
+    moveNumberList[index] = 0;
+  }
+
   public void tryToClearBestMoves() {
     clearAnalysisPayloadState();
   }
@@ -1597,12 +1677,27 @@ public class BoardData implements Cloneable {
     }
   }
 
+  boolean hasSameReplayMetadata(BoardData other) {
+    return recordsCaptureModes == other.recordsCaptureModes
+        && playedWithoutCaptures == other.playedWithoutCaptures
+        && hidesInheritedMoveNumbers == other.hidesInheritedMoveNumbers
+        && moveMNNumber == other.moveMNNumber
+        && Arrays.equals(moveNumberList, other.moveNumberList);
+  }
+
+  void copyReplayMetadataFrom(BoardData other) {
+    recordsCaptureModes = other.recordsCaptureModes;
+    playedWithoutCaptures = other.playedWithoutCaptures;
+    hidesInheritedMoveNumbers = other.hidesInheritedMoveNumbers;
+    moveMNNumber = other.moveMNNumber;
+    moveNumberList = copyIntArray(other.moveNumberList);
+  }
+
   private void copyCoreStateFrom(BoardData data) {
     this.nodeKind = data.getNodeKind();
-    this.moveMNNumber = data.moveMNNumber;
+    copyReplayMetadataFrom(data);
     this.moveNumber = data.moveNumber;
     this.lastMove = copyLastMove(data.lastMove);
-    this.moveNumberList = copyIntArray(data.moveNumberList);
     this.blackToPlay = data.blackToPlay;
     this.dummy = data.dummy;
     this.lastMoveColor = data.lastMoveColor;
