@@ -6,6 +6,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -595,40 +596,26 @@ public class BoardHistoryNode {
     if (index <= 0) {
       return;
     }
-    BoardHistoryNode previousSibling = variations.get(index - 1);
-    variations.set(index - 1, child);
-    variations.set(index, previousSibling);
-    if ((index - 1) == 0) {
-      child.swapMoveNumberList(previousSibling);
-    }
+    swapVariations(index - 1, index);
   }
 
   public void moveChildDown(BoardHistoryNode child) {
     int index = findDirectChildIndex(child);
-    if (index < 0 || index >= variations.size() - 1) {
-      return;
-    }
-    BoardHistoryNode nextSibling = variations.get(index + 1);
-    variations.set(index + 1, child);
-    variations.set(index, nextSibling);
-    if (index == 0) {
-      nextSibling.swapMoveNumberList(child);
-    }
+    if (index >= 0 && index < variations.size() - 1) swapVariations(index, index + 1);
   }
 
-  public void swapMoveNumberList(BoardHistoryNode child) {
-    int childStart = child.getData().moveMNNumber;
-    child.resetMoveNumberListBranch(this.getData().moveMNNumber);
-    this.resetMoveNumberListBranch(childStart);
+  boolean promoteChild(BoardHistoryNode child) {
+    int index = findDirectChildIndex(child);
+    if (index <= 0) return false;
+    swapVariations(0, index);
+    return true;
   }
 
-  public void resetMoveNumberListBranch(int start) {
-    this.resetMoveNumberList(start);
-    BoardHistoryNode node = this;
-    while (node.next().isPresent()) {
-      node = node.next().get();
-      start++;
-      node.resetMoveNumberList(start);
+  private void swapVariations(int first, int second) {
+    Collections.swap(variations, first, second);
+    if (first == 0) {
+      variations.get(first).rebuildBranchNumbers();
+      variations.get(second).rebuildBranchNumbers();
     }
   }
 
@@ -1034,27 +1021,56 @@ public class BoardHistoryNode {
         && numberOfChildren() == node.numberOfChildren();
   }
 
-  public void resetMoveNumberList() {
-    if (previous.isEmpty()) return;
-    BoardHistoryNode parent = previous.get();
-    boolean restart = parent.variations.get(0) != this && Lizzie.config.newMoveNumberInBranch;
-    data.moveNumber = parent.data.moveNumber + 1;
-    data.moveMNNumber = parent.data.nextMoveMNNumber(restart);
-    if (data.moveMNNumber == -1) {
-      parent.initializeRootChildNumber(data, restart);
-      if (data.moveMNNumber == -1) data.moveMNNumber = 1;
+  private void rebuildBranchNumbers() {
+    ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>();
+    pending.add(this);
+    while (!pending.isEmpty()) {
+      BoardHistoryNode node = pending.removeFirst();
+      node.rebuildNumbersFromParent();
+      pending.addAll(node.variations);
     }
-    if (restart) {
-      data.clearInheritedMoveNumbers();
+  }
+
+  private void rebuildNumbersFromParent() {
+    BoardHistoryNode parent = previous.orElseThrow();
+    BoardData inherited = parent.data;
+    boolean side = parent.variations.get(0) != this;
+    boolean restart = side && startsBranchNumberingAtOne();
+    // Reordering siblings keeps absolute move counts, including setup nodes and web placeholders.
+    boolean countedDummy = data.dummy && data.moveNumber != inherited.moveNumber;
+    if (data.dummy && !countedDummy) {
+      // A web trial reservation represents the anchor itself, even at an observed root.
+      data.moveMNNumber = restart ? 0 : inherited.moveMNNumber;
     } else {
-      data.moveNumberList = parent.data.moveNumberList.clone();
-      data.hidesInheritedMoveNumbers = false;
+      // A recorded DD is appended as an explicit dummy pass, even on the main line.
+      data.moveMNNumber = data.isSnapshotNode() && !restart
+          ? inherited.moveMNNumber : inherited.nextMoveMNNumber(restart || countedDummy);
+      parent.initializeRootChildNumber(data, restart);
+      if (restart && data.moveMNNumber == -1) data.moveMNNumber = data.dummy ? 0 : 1;
+    }
+
+    data.hidesInheritedMoveNumbers = restart || (side && countedDummy);
+    for (int i = 0; i < data.stones.length; i++) {
+      data.moveNumberList[i] = !data.hidesInheritedMoveNumbers && data.stones[i] != Stone.EMPTY
+          && data.stones[i] == inherited.stones[i] ? inherited.moveNumberList[i] : 0;
     }
     if (data.isMoveNode()) {
-      int[] move = data.lastMove.orElseThrow();
-      data.moveNumberList[data.zobrist.index(move[0], move[1])] = data.moveMNNumber;
+      int[] point = data.lastMove.orElseThrow();
+      int index = data.zobrist.index(point[0], point[1]);
+      if (data.stones[index] == data.lastMoveColor) {
+        data.moveNumberList[index] = data.moveMNNumber >= 0 ? data.moveMNNumber : data.moveNumber;
+      }
     }
-    if (this.numberOfChildren() >= 1) this.variations.get(0).resetMoveNumberList();
+    if (!data.isSnapshotNode() && extraStones != null) {
+      for (ExtraStones stone : extraStones) {
+        data.moveNumberList[data.zobrist.index(stone.x, stone.y)] = 0;
+      }
+    }
+    String authoredNumber = data.getProperty("MN");
+    if (authoredNumber != null) {
+      data.moveMNNumber = Integer.parseInt(authoredNumber);
+      applyMoveNumber(data.moveMNNumber, true);
+    }
   }
 
   public void setRemovedStone() {

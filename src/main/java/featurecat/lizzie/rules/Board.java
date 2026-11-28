@@ -5357,19 +5357,7 @@ public class Board {
     }
     BoardHistoryNode topNode = history.getCurrentHistoryNode().topOfFatherBranch();
     BoardHistoryNode mainNode = history.getCurrentHistoryNode().topOfFatherBranch2();
-    BoardHistoryNode oldFirstVar = mainNode.variations.get(0);
-    for (int i = 0; i < mainNode.variations.size(); i++) {
-      if (mainNode.variations.get(i) == topNode) {
-        mainNode.variations.remove(i);
-        mainNode.variations.add(i, oldFirstVar);
-        mainNode.variations.remove(0);
-        mainNode.variations.add(0, topNode);
-        oldFirstVar.resetMoveNumberList();
-        topNode.resetMoveNumberList();
-        return true;
-      }
-    }
-    return false;
+    return mainNode.promoteChild(topNode);
   }
 
   public void copyNodeInfoToMain(BoardHistoryNode node) {
