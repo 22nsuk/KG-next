@@ -3563,8 +3563,11 @@ class AnalysisEngineRequestTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"range", "missing", "wholeGame", "branches"})
-  void remoteBatchWithALaterUnplayablePositionFailsBeforeStartingASearch(String batch)
+  @CsvSource({
+      "range, false", "missing, false", "wholeGame, false", "branches, false",
+      "range, true", "missing, true", "wholeGame, true", "branches, true"
+  })
+  void batchWithALaterUnplayablePositionFailsBeforeStartingASearch(String batch, boolean remote)
       throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardHistoryList history =
@@ -3574,7 +3577,7 @@ class AnalysisEngineRequestTest {
       history.setHead(firstMove);
       boardWithHistory(history);
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
-      engine.useRemoteCompute = true;
+      engine.useRemoteCompute = remote;
       AtomicInteger failures = new AtomicInteger();
       AtomicInteger completions = new AtomicInteger();
       engine.setFailureCallback(restore -> failures.incrementAndGet());
@@ -3598,9 +3601,16 @@ class AnalysisEngineRequestTest {
       history.getEnd().getData().setPlayouts(AnalysisEngine.targetAnalysisVisits());
       engine.startRequestAllBranches(false);
       assertEquals(1, engine.pendingRequestCount());
-      assertNumberedAnalyzeCommand(
-          lastCommand(engine.sentCommands), "kata-analyze B 1 maxmoves 1 rootInfo true");
-      completeRemoteGtpSearch(engine, AnalysisEngine.targetAnalysisVisits(), 60.0, 1.0);
+      int visits = AnalysisEngine.targetAnalysisVisits();
+      if (remote) {
+        assertNumberedAnalyzeCommand(
+            lastCommand(engine.sentCommands), "kata-analyze B 1 maxmoves 1 rootInfo true");
+        completeRemoteGtpSearch(engine, visits, 60.0, 1.0);
+      } else {
+        JSONObject request = engine.singleRequest();
+        assertEquals(List.of(List.of("W", "C1")), request.getJSONArray("moves").toList());
+        engine.parseResult(analysisResult(request.getInt("id"), visits, 60.0));
+      }
       assertFalse(engine.hasRequestLifecycleInProgress());
     }
   }

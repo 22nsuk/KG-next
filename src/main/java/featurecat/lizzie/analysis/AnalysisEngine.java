@@ -1641,21 +1641,18 @@ public class AnalysisEngine {
     prepareRequestState(showProgressDialog);
     captureCurrentGameIdentity();
     BoardHistoryNode node = Lizzie.board.getHistory().getStart();
+    List<BoardHistoryNode> selected = new ArrayList<>();
     Stack<BoardHistoryNode> stack = new Stack<>();
     stack.push(node);
     while (!stack.isEmpty()) {
       BoardHistoryNode cur = stack.pop();
-      if (shouldAnalyzeBranchNode(cur)) {
-        if (queueRequest(cur, targetAnalysisVisits(), Lizzie.config.showKataGoEstimate) < 0) break;
-      }
+      if (shouldAnalyzeBranchNode(cur)) selected.add(cur);
       if (cur.numberOfChildren() >= 1) {
         for (int i = cur.numberOfChildren() - 1; i >= 0; i--)
           stack.push(cur.getVariations().get(i));
       }
     }
-    if (useRemoteCompute) {
-      startQueuedRemoteGtpBatch();
-    }
+    dispatchPositionBatch(selected, targetAnalysisVisits(), Lizzie.config.showKataGoEstimate);
     showRequestProgressOrContinueBatch(showProgressDialog);
   }
 
@@ -1673,24 +1670,10 @@ public class AnalysisEngine {
     prepareRequestState(showProgressDialog);
     captureCurrentGameIdentity();
     int targetVisits = targetAnalysisVisitsForCurrentRequest(showProgressDialog);
-    if (useRemoteCompute) {
-      enqueueRemoteGtpMainlineRequests(
-          targetVisits,
-          (node, moveNum) ->
-              shouldAnalyzeTurn(moveNum, startMove, endMove)
-                  && shouldAnalyzeNode(node, targetVisits));
-      showRequestProgressOrContinueBatch(showProgressDialog);
-      return;
-    }
-    BoardHistoryNode node = firstHistoryActionNode(Lizzie.board.getHistory().getStart());
-    int moveNum = 1;
-    while (node != null) {
-      if (shouldAnalyzeTurn(moveNum, startMove, endMove) && shouldAnalyzeNode(node, targetVisits)) {
-        if (!sendRequest(node)) break;
-      }
-      node = nextHistoryActionNode(node);
-      moveNum++;
-    }
+    List<BoardHistoryNode> selected = selectMainlineNodes(
+        (node, moveNum) -> shouldAnalyzeTurn(moveNum, startMove, endMove)
+            && shouldAnalyzeNode(node, targetVisits));
+    dispatchMainlineRequests(selected, targetVisits, Lizzie.config.showKataGoEstimate);
     showRequestProgressOrContinueBatch(showProgressDialog);
   }
 
@@ -1739,20 +1722,11 @@ public class AnalysisEngine {
     // Background completion also runs on reusable preloaded workers, not just AUTO_QUICK_ANALYSIS.
     preserveBoardPositionOnCompletion = true;
     captureCurrentGameIdentity();
-    if (useRemoteCompute) {
-      enqueueRemoteGtpMainlineRequests(
-          targetAnalysisVisitsForCurrentRequest(showProgressDialog),
-          (node, moveNum) -> shouldAnalyzeMissingNode(node));
-    } else {
-      BoardHistoryNode node = firstHistoryActionNode(Lizzie.board.getHistory().getStart());
-      while (node != null) {
-        if (shouldAnalyzeMissingNode(node)) {
-          captureRequestPosition(node);
-          if (!sendRequest(node)) break;
-        }
-        node = nextHistoryActionNode(node);
-      }
-    }
+    List<BoardHistoryNode> selected =
+        selectMainlineNodes((node, moveNum) -> shouldAnalyzeMissingNode(node));
+    if (!useRemoteCompute) selected.forEach(this::captureRequestPosition);
+    dispatchMainlineRequests(selected, targetAnalysisVisitsForCurrentRequest(showProgressDialog),
+        Lizzie.config.showKataGoEstimate);
     int requestCount = analyzeMap.size();
     boolean dispatchFailed = requestDispatchFailed;
     showRequestProgressOrContinueBatch(showProgressDialog);
@@ -1832,45 +1806,13 @@ public class AnalysisEngine {
     requestRemoteGtpRules = useRemoteCompute ? resolveRemoteGtpRules() : null;
     requestRulesSignature = selectedCurrentEngine == null ? currentAnalysisRulesSignature() : null;
 
-    Set<BoardHistoryNode> uniqueNodes = new LinkedHashSet<BoardHistoryNode>();
-    if (requestedNodes != null) {
-      for (BoardHistoryNode node : requestedNodes) {
-        if (node != null
-            && node.getData() != null
-            && !node.getData()
-                .hasReusablePrimaryAnalysis(
-                    explicitRequestTargetVisits,
-                    explicitRequestOwnershipRequested,
-                    requiredAnalysisRun)) {
-          uniqueNodes.add(node);
-        }
-      }
-    }
-    for (BoardHistoryNode node : uniqueNodes) {
-      captureRequestPosition(node);
-    }
-
-    if (useRemoteCompute) {
-      if (!shutdownRequested && requestStillTargetsCurrentGame()) {
-        enqueueRemoteGtpRequests(
-            orderRemoteGtpMainlineNodes(new ArrayList<BoardHistoryNode>(uniqueNodes)),
-            explicitRequestTargetVisits);
-      } else {
-        requestDispatchFailed = true;
-      }
+    List<BoardHistoryNode> selected = collectWholeGameRequestNodes(
+        requestedNodes, explicitRequestTargetVisits, explicitRequestOwnershipRequested, requiredAnalysisRun);
+    selected.forEach(this::captureRequestPosition);
+    if (requestStillTargetsCurrentGame()) {
+      dispatchMainlineRequests(selected, explicitRequestTargetVisits, explicitRequestOwnershipRequested);
     } else {
-      for (BoardHistoryNode node : uniqueNodes) {
-        if (requestDispatchFailed || shutdownRequested) {
-          requestDispatchFailed = true;
-          break;
-        }
-        if (!requestStillTargetsCurrentGame()) {
-          requestDispatchFailed = true;
-          break;
-        }
-        if (queueRequest(node, explicitRequestTargetVisits, explicitRequestOwnershipRequested) < 0)
-          break;
-      }
+      requestDispatchFailed = true;
     }
     int requestCount = analyzeMap.size();
     boolean dispatchFailed = requestDispatchFailed;
@@ -2118,8 +2060,9 @@ public class AnalysisEngine {
   }
 
   public boolean sendRequest(BoardHistoryNode analyzeNode) {
-    int requestId =
-        queueRequest(analyzeNode, targetAnalysisVisits(), Lizzie.config.showKataGoEstimate);
+    RequestPosition position = prepareRequestPosition(analyzeNode);
+    if (position == null) return false;
+    int requestId = queueRequest(position, targetAnalysisVisits(), Lizzie.config.showKataGoEstimate);
     if (requestId < 0) return false;
     if (useRemoteCompute
         && remoteGtpActiveJob == null
@@ -2132,14 +2075,41 @@ public class AnalysisEngine {
     return true;
   }
 
-  // JSON requests enter the engine's queue directly. GTP searches start after batch admission.
-  private int queueRequest(
-      BoardHistoryNode analyzeNode, int maxVisits, boolean includeOwnership) {
-    BoardHistoryNode snapshotAnchor = analyzeNode.findEngineSnapshotAnchor();
-    if (shutdownRequested || isUnplayableAnchor(snapshotAnchor)) {
+  private record RequestPosition(BoardHistoryNode node, BoardHistoryNode anchor) {}
+
+  private RequestPosition prepareRequestPosition(BoardHistoryNode node) {
+    BoardHistoryNode anchor = node.findEngineSnapshotAnchor();
+    if (shutdownRequested || isUnplayableAnchor(anchor)) {
       requestDispatchFailed = true;
-      return -1;
+      return null;
     }
+    return new RequestPosition(node, anchor);
+  }
+
+  private void dispatchPositionBatch(
+      List<BoardHistoryNode> nodes, int maxVisits, boolean includeOwnership) {
+    // JSON writes start searches immediately. Validate the entire selection first, retaining
+    // only the node and its replay anchor until its turn to send.
+    List<RequestPosition> positions = new ArrayList<>(nodes.size());
+    for (BoardHistoryNode node : nodes) {
+      RequestPosition position = prepareRequestPosition(node);
+      if (position == null) return;
+      positions.add(position);
+    }
+    for (RequestPosition position : positions) {
+      if (requestDispatchFailed || shutdownRequested
+          || (explicitRequestTargetVisits > 0 && !requestStillTargetsCurrentGame())) {
+        requestDispatchFailed = true;
+        return;
+      }
+      if (queueRequest(position, maxVisits, includeOwnership) < 0) return;
+    }
+    if (useRemoteCompute) startQueuedRemoteGtpBatch();
+  }
+
+  private int queueRequest(RequestPosition position, int maxVisits, boolean includeOwnership) {
+    BoardHistoryNode analyzeNode = position.node();
+    BoardHistoryNode snapshotAnchor = position.anchor();
     if (useRemoteCompute) {
       return enqueueRemoteGtpRequest(
           analyzeNode, maxVisits, buildRemoteGtpSetupCommands(analyzeNode, snapshotAnchor));
@@ -2219,8 +2189,7 @@ public class AnalysisEngine {
     return setup.hasGroupWithoutLiberty();
   }
 
-  private void enqueueRemoteGtpMainlineRequests(
-      int targetVisits, RemoteGtpMainlineSelector selector) {
+  private static List<BoardHistoryNode> selectMainlineNodes(MainlineSelector selector) {
     List<BoardHistoryNode> selectedNodes = new ArrayList<BoardHistoryNode>();
     BoardHistoryNode node = firstHistoryActionNode(Lizzie.board.getHistory().getStart());
     int moveNum = 1;
@@ -2231,8 +2200,13 @@ public class AnalysisEngine {
       node = nextHistoryActionNode(node);
       moveNum++;
     }
-    List<BoardHistoryNode> orderedNodes = orderRemoteGtpMainlineNodes(selectedNodes);
-    enqueueRemoteGtpRequests(orderedNodes, targetVisits);
+    return selectedNodes;
+  }
+
+  private void dispatchMainlineRequests(
+      List<BoardHistoryNode> nodes, int targetVisits, boolean includeOwnership) {
+    if (useRemoteCompute) enqueueRemoteGtpRequests(orderRemoteGtpMainlineNodes(nodes), targetVisits);
+    else dispatchPositionBatch(nodes, targetVisits, includeOwnership);
   }
 
   private void enqueueRemoteGtpRequests(List<BoardHistoryNode> orderedNodes, int targetVisits) {
@@ -3237,7 +3211,7 @@ public class AnalysisEngine {
     }
   }
 
-  private interface RemoteGtpMainlineSelector {
+  private interface MainlineSelector {
     boolean shouldAnalyze(BoardHistoryNode node, int moveNum);
   }
 }
